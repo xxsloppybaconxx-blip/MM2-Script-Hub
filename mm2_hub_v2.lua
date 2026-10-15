@@ -1,0 +1,1474 @@
+--[[
+  MM2 SPECTRA HUB 2.0
+  Original, readable, client-side Luau example.
+  Best tested in a Roblox Studio LocalScript in StarterPlayerScripts.
+  Also uses ordinary Roblox client APIs for executor compatibility,
+  but has NOT been tested in Delta or the live MM2 experience.
+
+  Features: MM2 game-reported roles (if available), live role radar,
+  player ESP, nametags, distance, visible-weapon hints,
+  through-wall outlines, player tracers, rainbow ESP, dropped-gun
+  and coin markers (name-based), spectate, camera tracking, selected
+  player cycling, movement options, optional fly, teleport attempts,
+  fullbright, post-effect reduction, player count, anti-void,
+  local demo target, mobile-friendly draggable UI and cleanup.
+
+  Role information is only definitive when MM2 provides readable role data.
+  Visible weapon hints are explicitly marked unconfirmed. No auto-kill or insta-win.
+]]
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local TeleportService = game:GetService("TeleportService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local localPlayer = Players.LocalPlayer
+if not localPlayer then
+    warn("This hub must run on a Roblox client.")
+    return
+end
+local playerGui = localPlayer:WaitForChild("PlayerGui")
+
+-- Allow running the script twice without leaving connections behind.
+local environment = _G
+if type(getgenv) == "function" then
+    local ok, value = pcall(getgenv)
+    if ok and type(value) == "table" then environment = value end
+end
+if type(environment.MM2LearningHubUnload) == "function" then
+    pcall(environment.MM2LearningHubUnload)
+end
+
+local connections = {}
+local function watch(connection)
+    table.insert(connections, connection)
+    return connection
+end
+
+local enabled = {
+    PlayerESP = true,
+    RoleESP = true,
+    ShowRoles = true,
+    ThreatsOnly = false,
+    RangeLimit = false,
+    RoleAlerts = true,
+    Names = true,
+    Distances = true,
+    Health = true,
+    WeaponHints = true,
+    XRay = true,
+    Tracers = false,
+    Rainbow = false,
+    GunESP = false,
+    KnifeESP = false,
+    CoinESP = false,
+    Sprint = false,
+    CustomJump = false,
+    InfiniteJump = false,
+    Noclip = false,
+    Fly = false,
+    AntiFling = false,
+    Fullbright = false,
+    LowFX = false,
+    NoFog = false,
+    HideOwnName = false,
+    AntiSlip = false,
+    AntiVoid = false,
+    CameraLock = false,
+}
+local numbers = { Speed = 24, Jump = 65, FlySpeed = 35, FOV = 70, ESPRange = 250 }
+local playerEffects = {}
+local objectEffects = {}
+local originalCollisions = {}
+local originalFX = {}
+local demoParts = {}
+local selectedPlayer = nil
+local spectateTarget = nil
+local flyAttachment = nil
+local flyVelocity = nil
+local flyRoot = nil
+local flyUp, flyDown = false, false
+local lastSafeCFrame = nil
+local destroyed = false
+local lastVisualTick = 0
+local previousGravity = Workspace.Gravity
+local previousFOV = Workspace.CurrentCamera and Workspace.CurrentCamera.FieldOfView or 70
+local fogOriginal = {}
+local ownNameOriginal = setmetatable({}, { __mode = "k" })
+local roleMap, roleFetchBusy, lastRoleFetch = {}, false, -100
+local roleLastUpdate, roleSyncMessage = 0, "Waiting for MM2 role data"
+local roleChangeSignature = ""
+local lastRoleUI = 0
+local lightOriginal = {
+    Brightness = Lighting.Brightness,
+    ClockTime = Lighting.ClockTime,
+    Ambient = Lighting.Ambient,
+    OutdoorAmbient = Lighting.OutdoorAmbient,
+    GlobalShadows = Lighting.GlobalShadows,
+    FogEnd = Lighting.FogEnd,
+    FogStart = Lighting.FogStart,
+}
+
+local function characterOf(p)
+    return p and p.Character or nil
+end
+local function rootOf(p)
+    local char = characterOf(p)
+    return char and char:FindFirstChild("HumanoidRootPart") or nil
+end
+local function humanOf(p)
+    local char = characterOf(p)
+    return char and char:FindFirstChildOfClass("Humanoid") or nil
+end
+local function alive(p)
+    local humanoid = humanOf(p)
+    return humanoid and humanoid.Health > 0
+end
+local function distanceTo(part)
+    local ownRoot = rootOf(localPlayer)
+    return ownRoot and (ownRoot.Position - part.Position).Magnitude or nil
+end
+
+-- Hints ONLY based on an equipped Tool that other players can see.
+local function visibleWeaponHint(p)
+    local char = characterOf(p)
+    if not char then return "Unknown" end
+    for _, child in ipairs(char:GetChildren()) do
+        if child:IsA("Tool") then
+            local name = child.Name:lower()
+            if name:find("knife", 1, true) then return "Knife visible" end
+            if name:find("gun", 1, true) or name:find("revolver", 1, true) then
+                return "Gun visible"
+            end
+        end
+    end
+    return "Unknown"
+end
+local function colorForHint(hint)
+    if hint == "Knife visible" then return Color3.fromRGB(255, 86, 88) end
+    if hint == "Gun visible" then return Color3.fromRGB(85, 176, 255) end
+    return Color3.fromRGB(95, 245, 160)
+end
+
+-- Game-reported roles are refreshed at most once every six seconds.
+-- Many MM2 script examples refer to this RemoteFunction. Never infer that
+-- an unknown player is innocent, and do not claim an equipped tool confirms a role.
+local validRole = { Murderer = true, Sheriff = true, Innocent = true, Hero = true }
+local function refreshRoles()
+    if roleFetchBusy or destroyed then return end
+    roleFetchBusy = true
+    task.spawn(function()
+        local remote = ReplicatedStorage:FindFirstChild("GetPlayerData", true)
+        if not remote or not remote:IsA("RemoteFunction") then
+            roleMap = {}
+            roleSyncMessage = "Role feed unavailable • using observed tools"
+            roleFetchBusy = false
+            return
+        end
+        local ok, data = pcall(function() return remote:InvokeServer() end)
+        if destroyed then return end
+        if ok and type(data) == "table" then
+            local received, count = {}, 0
+            for username, info in pairs(data) do
+                if type(info) == "table" and validRole[info.Role] then
+                    local key = type(username) == "string" and username
+                        or type(info.Name) == "string" and info.Name or nil
+                    if key then
+                        received[key] = { role = info.Role, dead = info.Dead == true or info.Killed == true }
+                        count += 1
+                    end
+                end
+            end
+            if count > 0 then
+                roleMap = received
+                roleLastUpdate = os.clock()
+                roleSyncMessage = "MM2 role feed • " .. count .. " players"
+            else
+                roleMap = {}
+                roleSyncMessage = "No readable roles returned • using tool hints"
+            end
+        else
+            roleMap = {}
+            roleSyncMessage = "Role request unavailable • using tool hints"
+        end
+        roleFetchBusy = false
+    end)
+end
+
+local function getRole(player)
+    if player and os.clock() - roleLastUpdate < 12 then
+        local data = roleMap[player.Name]
+        if data then return data.role, "game", data.dead end
+    end
+    local hint = player and visibleWeaponHint(player) or "Unknown"
+    if hint == "Knife visible" then return "Murderer", "hint", false end
+    if hint == "Gun visible" then return "Sheriff", "hint", false end
+    return "Unknown", "none", false
+end
+local function getRoleColor(role, source)
+    if role == "Murderer" then return Color3.fromRGB(255, 86, 104) end
+    if role == "Sheriff" then return Color3.fromRGB(83, 168, 255) end
+    if role == "Hero" then return Color3.fromRGB(255, 205, 83) end
+    if role == "Innocent" then return Color3.fromRGB(98, 231, 159) end
+    return Color3.fromRGB(165, 180, 206)
+end
+local function roleDisplay(role, source)
+    if source == "game" then return role end
+    if source == "hint" then return role .. "? [tool seen]" end
+    return "Unknown"
+end
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "SpectraMM2Hub"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = playerGui
+
+-- World-space effects must be parented in Workspace, not inside ScreenGui.
+local effectsFolder = Instance.new("Folder")
+effectsFolder.Name = "SpectraMM2Effects"
+effectsFolder.Parent = Workspace
+
+local function round(parent, radius)
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, radius or 9)
+    corner.Parent = parent
+end
+local function stroke(parent, color, transparency)
+    local outline = Instance.new("UIStroke")
+    outline.Color = color or Color3.fromRGB(65, 75, 100)
+    outline.Transparency = transparency or 0
+    outline.Parent = parent
+end
+local function label(parent, text, h, color, size)
+    local l = Instance.new("TextLabel")
+    l.BackgroundTransparency = 1
+    l.TextColor3 = color or Color3.fromRGB(225, 231, 245)
+    l.TextSize = size or 14
+    l.Font = Enum.Font.Gotham
+    l.Text = text
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.TextWrapped = true
+    l.Size = UDim2.new(1, -10, 0, h)
+    l.Parent = parent
+    return l
+end
+
+local viewport = Workspace.CurrentCamera and Workspace.CurrentCamera.ViewportSize or Vector2.new(390, 700)
+local width = math.clamp(viewport.X - 22, 270, 392)
+local height = math.clamp(viewport.Y - 65, 330, 530)
+local window = Instance.new("Frame")
+window.Name = "Window"
+window.Size = UDim2.fromOffset(width, height)
+window.Position = UDim2.new(0, 12, 0, 52)
+window.BackgroundColor3 = Color3.fromRGB(14, 19, 32)
+window.Active = true
+window.Parent = gui
+round(window, 16)
+stroke(window, Color3.fromRGB(70, 99, 135), 0.20)
+
+local top = Instance.new("Frame")
+top.Size = UDim2.new(1, 0, 0, 48)
+top.BackgroundColor3 = Color3.fromRGB(25, 36, 55)
+top.Active = true
+top.Parent = window
+round(top, 15)
+local title = label(top, "SPECTRA   /   MM2   •   v2", 45, Color3.fromRGB(181, 225, 255), 15)
+title.Position = UDim2.fromOffset(11, 1)
+title.Size = UDim2.new(1, -87, 0, 45)
+title.Font = Enum.Font.GothamBold
+
+local minimize = Instance.new("TextButton")
+minimize.Size = UDim2.fromOffset(32, 30)
+minimize.Position = UDim2.new(1, -76, 0, 9)
+minimize.Text = "−"
+minimize.TextSize = 21
+minimize.Font = Enum.Font.GothamBold
+minimize.TextColor3 = Color3.new(1, 1, 1)
+minimize.BackgroundColor3 = Color3.fromRGB(65, 79, 111)
+minimize.Parent = top
+round(minimize, 7)
+local close = minimize:Clone()
+close.Position = UDim2.new(1, -38, 0, 9)
+close.Text = "×"
+close.BackgroundColor3 = Color3.fromRGB(141, 58, 73)
+close.Parent = top
+
+local tabs = Instance.new("Frame")
+tabs.Name = "Tabs"
+tabs.BackgroundTransparency = 1
+tabs.Position = UDim2.new(0, 8, 0, 83)
+tabs.Size = UDim2.new(1, -16, 0, 38)
+tabs.Parent = window
+local tabLayout = Instance.new("UIListLayout")
+tabLayout.FillDirection = Enum.FillDirection.Horizontal
+tabLayout.Padding = UDim.new(0, 4)
+tabLayout.Parent = tabs
+local main = Instance.new("Frame")
+main.Name = "Pages"
+main.BackgroundTransparency = 1
+main.Position = UDim2.fromOffset(8, 127)
+main.Size = UDim2.new(1, -16, 1, -164)
+main.Parent = window
+local status = Instance.new("TextLabel")
+status.BackgroundColor3 = Color3.fromRGB(29, 37, 56)
+status.Position = UDim2.new(0, 8, 1, -34)
+status.Size = UDim2.new(1, -16, 0, 26)
+status.TextColor3 = Color3.fromRGB(188, 212, 231)
+status.TextSize = 12
+status.Text = "Ready • role information only if game reports it"
+status.TextTruncate = Enum.TextTruncate.AtEnd
+status.Font = Enum.Font.Gotham
+status.Parent = window
+round(status, 6)
+local function inform(message)
+    if not destroyed then status.Text = message end
+end
+
+local pages = {}
+local tabButtons = {}
+local toggleUpdaters = {}
+local function makeTab(name)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0.20, -4, 1, 0)
+    b.Text = name
+    b.TextSize = 11
+    b.Font = Enum.Font.GothamBold
+    b.BackgroundColor3 = Color3.fromRGB(33, 45, 67)
+    b.TextColor3 = Color3.fromRGB(220, 229, 246)
+    b.Parent = tabs
+    round(b, 9)
+    local page = Instance.new("ScrollingFrame")
+    page.Name = name
+    page.BorderSizePixel = 0
+    page.BackgroundTransparency = 1
+    page.Size = UDim2.fromScale(1, 1)
+    page.ScrollBarThickness = 4
+    page.ScrollBarImageColor3 = Color3.fromRGB(99, 174, 255)
+    page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    page.CanvasSize = UDim2.fromOffset(0, 0)
+    page.Visible = false
+    page.Parent = main
+    local pad = Instance.new("UIPadding")
+    pad.PaddingTop = UDim.new(0, 3)
+    pad.PaddingBottom = UDim.new(0, 8)
+    pad.PaddingLeft = UDim.new(0, 3)
+    pad.PaddingRight = UDim.new(0, 7)
+    pad.Parent = page
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 6)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Parent = page
+    pages[name] = page
+    tabButtons[name] = b
+    watch(b.MouseButton1Click:Connect(function()
+        for tabName, p in pairs(pages) do
+            p.Visible = tabName == name
+            tabButtons[tabName].BackgroundColor3 = tabName == name
+                and Color3.fromRGB(38, 119, 167) or Color3.fromRGB(33, 45, 67)
+        end
+    end))
+    return page
+end
+local rolesPage = makeTab("Roles")
+local visualsPage = makeTab("ESP")
+local movementPage = makeTab("Move")
+local toolsPage = makeTab("Tools")
+local settingsPage = makeTab("Extra")
+tabButtons.Roles.BackgroundColor3 = Color3.fromRGB(38, 119, 167)
+rolesPage.Visible = true
+
+-- Persistent role status, always visible while the hub is open.
+local roleStrip = Instance.new("TextLabel")
+roleStrip.Name = "RoleStatus"
+roleStrip.Position = UDim2.fromOffset(8, 53)
+roleStrip.Size = UDim2.new(1, -16, 0, 25)
+roleStrip.BackgroundColor3 = Color3.fromRGB(30, 50, 72)
+roleStrip.TextColor3 = Color3.fromRGB(202, 224, 244)
+roleStrip.Font = Enum.Font.GothamMedium
+roleStrip.TextSize = 11
+roleStrip.Text = "ROLE RADAR  •  checking for game data..."
+roleStrip.TextTruncate = Enum.TextTruncate.AtEnd
+roleStrip.Parent = window
+round(roleStrip, 7)
+local launcher = Instance.new("TextButton")
+launcher.Name = "Reopen"
+launcher.Size = UDim2.fromOffset(116, 42)
+launcher.Position = UDim2.new(1, -126, 0, 55)
+launcher.BackgroundColor3 = Color3.fromRGB(28, 103, 150)
+launcher.TextColor3 = Color3.fromRGB(255,255,255)
+launcher.TextSize = 14
+launcher.Font = Enum.Font.GothamBold
+launcher.Text = "◉ SPECTRA"
+launcher.Visible = false
+launcher.Parent = gui
+round(launcher, 13)
+stroke(launcher, Color3.fromRGB(134, 198, 242), 0.45)
+
+local function heading(page, text)
+    local l = label(page, text, 25, Color3.fromRGB(156, 213, 255), 15)
+    l.Font = Enum.Font.GothamBold
+    l.Size = UDim2.new(1, -4, 0, 25)
+end
+local function makeButton(page, text, callback)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(1, -3, 0, 43)
+    b.BackgroundColor3 = Color3.fromRGB(32, 44, 66)
+    b.TextColor3 = Color3.fromRGB(237, 242, 251)
+    b.TextSize = 13
+    b.TextXAlignment = Enum.TextXAlignment.Left
+    b.TextWrapped = true
+    b.Font = Enum.Font.GothamMedium
+    b.Text = text
+    b.Parent = page
+    round(b, 10)
+    local inset = Instance.new("UIPadding")
+    inset.PaddingLeft = UDim.new(0, 12)
+    inset.PaddingRight = UDim.new(0, 7)
+    inset.Parent = b
+    watch(b.MouseButton1Click:Connect(function()
+        if not destroyed then
+            local ok, err = pcall(callback)
+            if not ok then inform("Error: " .. tostring(err):sub(1, 72)) end
+        end
+    end))
+    return b
+end
+local function toggle(page, name, key, onChanged)
+    local b
+    local function update()
+        b.Text = (enabled[key] and "●  " or "○  ") .. name .. (enabled[key] and "    ON" or "    OFF")
+        b.BackgroundColor3 = enabled[key] and Color3.fromRGB(24, 89, 91)
+            or Color3.fromRGB(32, 44, 66)
+    end
+    b = makeButton(page, "", function()
+        enabled[key] = not enabled[key]
+        update()
+        if onChanged then onChanged(enabled[key]) end
+    end)
+    update()
+    table.insert(toggleUpdaters, update)
+    return b
+end
+
+-- Drag window with mouse or touch.
+local dragging = false
+local startPos, startInput, dragType
+watch(top.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        startPos = window.Position
+        startInput = input.Position
+        dragType = input.UserInputType
+    end
+end))
+watch(UserInputService.InputChanged:Connect(function(input)
+    if not dragging then return end
+    if dragType == Enum.UserInputType.Touch and input.UserInputType ~= Enum.UserInputType.Touch then return end
+    if dragType == Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+    local delta = input.Position - startInput
+    local screen = Workspace.CurrentCamera and Workspace.CurrentCamera.ViewportSize
+        or Vector2.new(390, 700)
+    local newX = math.clamp(startPos.X.Offset + delta.X, -width + 70, screen.X - 70)
+    local newY = math.clamp(startPos.Y.Offset + delta.Y, 0, screen.Y - 42)
+    window.Position = UDim2.fromOffset(newX, newY)
+end))
+watch(UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == dragType then dragging = false end
+end))
+local minimized = false
+watch(minimize.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    tabs.Visible = not minimized
+    main.Visible = not minimized
+    status.Visible = not minimized
+    window.Visible = not minimized
+    launcher.Visible = minimized
+    window.Size = UDim2.fromOffset(width, height)
+    minimize.Text = "−"
+end))
+
+watch(launcher.MouseButton1Click:Connect(function()
+    minimized = false
+    window.Visible = true
+    launcher.Visible = false
+end))
+-- Player visuals ------------------------------------------------------
+local function destroyPlayerEffect(p)
+    local e = playerEffects[p]
+    if e then
+        -- Never destroy e.char: it belongs to the player, not this script.
+        e.highlight:Destroy()
+        e.billboard:Destroy()
+        playerEffects[p] = nil
+    end
+end
+local function makePlayerEffect(p)
+    local char = characterOf(p)
+    local root = rootOf(p)
+    local head = char and char:FindFirstChild("Head")
+    if not char or not root or not head then return end
+    local existing = playerEffects[p]
+    if existing and existing.char == char then return end
+    destroyPlayerEffect(p)
+    local h = Instance.new("Highlight")
+    h.Name = "LearningHubPlayerHighlight"
+    h.Adornee = char
+    h.FillTransparency = 0.72
+    h.OutlineTransparency = 0
+    h.Parent = effectsFolder
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "PlayerInfo"
+    billboard.Adornee = head
+    billboard.Size = UDim2.fromOffset(222, 64)
+    billboard.StudsOffsetWorldSpace = Vector3.new(0, 2.8, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Parent = gui
+    local text = Instance.new("TextLabel")
+    text.Size = UDim2.fromScale(1, 1)
+    text.TextScaled = false
+    text.TextSize = 12
+    text.TextWrapped = true
+    text.Font = Enum.Font.GothamBold
+    text.TextColor3 = Color3.new(1, 1, 1)
+    text.TextStrokeTransparency = 0.25
+    text.BackgroundTransparency = 1
+    text.Parent = billboard
+
+    playerEffects[p] = { char = char, highlight = h, billboard = billboard, text = text }
+end
+local function updatePlayerEffects(timeNow)
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= localPlayer then
+            local role, source = getRole(p)
+            local tracked = not enabled.ThreatsOnly or (role == "Murderer" or role == "Sheriff" or role == "Hero")
+            local targetRoot = rootOf(p)
+            local distance = targetRoot and distanceTo(targetRoot)
+            local inRange = not enabled.RangeLimit or (distance and distance <= numbers.ESPRange)
+            if enabled.PlayerESP and alive(p) and tracked and inRange then
+                makePlayerEffect(p)
+                local e = playerEffects[p]
+                if e then
+                    local hint = visibleWeaponHint(p)
+                    local color = enabled.Rainbow and Color3.fromHSV((timeNow / 5) % 1, 0.85, 1)
+                        or (enabled.RoleESP and getRoleColor(role, source) or colorForHint(hint))
+                    e.highlight.Enabled = true
+                    e.highlight.OutlineTransparency = source == "hint" and 0.35 or 0
+                    e.highlight.FillColor = color
+                    e.highlight.OutlineColor = color
+                    e.highlight.DepthMode = enabled.XRay and Enum.HighlightDepthMode.AlwaysOnTop
+                        or Enum.HighlightDepthMode.Occluded
+                    e.billboard.Enabled = enabled.Names or enabled.Distances or enabled.WeaponHints or enabled.Health or enabled.ShowRoles
+                    local pieces = {}
+                    if enabled.Names then table.insert(pieces, p.DisplayName) end
+                    local root = rootOf(p)
+                    local distance = root and distanceTo(root)
+                    if enabled.Distances and distance then
+                        table.insert(pieces, ("%d studs"):format(math.floor(distance)))
+                    end
+                    if enabled.Health then
+                        local hum = humanOf(p)
+                        if hum then table.insert(pieces, ("HP %d"):format(math.ceil(hum.Health))) end
+                    end
+                    if enabled.ShowRoles then table.insert(pieces, roleDisplay(role, source)) end
+                    if enabled.WeaponHints and hint ~= "Unknown" then table.insert(pieces, hint) end
+                    e.text.Text = table.concat(pieces, "  |  ")
+                    e.text.TextColor3 = color
+                end
+            else
+                destroyPlayerEffect(p)
+            end
+        end
+    end
+    for p in pairs(playerEffects) do
+        if not p.Parent then destroyPlayerEffect(p) end
+    end
+end
+
+-- Tracers follow the local root and target root via Beam Attachments.
+local tracerEffects = {}
+local function clearTracer(p)
+    local e = tracerEffects[p]
+    if not e then return end
+    -- Only destroy the Beam and attachments we created.
+    e.beam:Destroy()
+    e.a0:Destroy()
+    e.a1:Destroy()
+    tracerEffects[p] = nil
+end
+local function updateTracers()
+    local mine = rootOf(localPlayer)
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= localPlayer then
+            local theirs = rootOf(p)
+            local e = tracerEffects[p]
+            local role, source = getRole(p)
+            local tracked = not enabled.ThreatsOnly or (role == "Murderer" or role == "Sheriff" or role == "Hero")
+            local inRange = not enabled.RangeLimit or (theirs and distanceTo(theirs) and distanceTo(theirs) <= numbers.ESPRange)
+            if not enabled.PlayerESP or not enabled.Tracers or not tracked or not inRange or not mine or not theirs or not alive(p) then
+                clearTracer(p)
+            else
+                if e and (e.mine ~= mine or e.theirs ~= theirs) then
+                    clearTracer(p)
+                    e = nil
+                end
+                if not e then
+                    local a0 = Instance.new("Attachment")
+                    a0.Name = "LearningHubTracerOrigin"
+                    a0.Parent = mine
+                    local a1 = Instance.new("Attachment")
+                    a1.Name = "LearningHubTracerTarget"
+                    a1.Parent = theirs
+                    local beam = Instance.new("Beam")
+                    beam.Attachment0 = a0
+                    beam.Attachment1 = a1
+                    beam.Width0 = 0.07
+                    beam.Width1 = 0.07
+                    beam.FaceCamera = true
+                    beam.LightEmission = 0.9
+                    beam.Transparency = NumberSequence.new(0.16)
+                    beam.Parent = effectsFolder
+                    e = { mine = mine, theirs = theirs, a0 = a0, a1 = a1, beam = beam }
+                    tracerEffects[p] = e
+                end
+                e.beam.Color = ColorSequence.new(enabled.RoleESP
+                    and getRoleColor(role, source) or colorForHint(visibleWeaponHint(p)))
+            end
+        end
+    end
+    for p in pairs(tracerEffects) do
+        if not p.Parent then clearTracer(p) end
+    end
+end
+
+-- Name-based map markers, not MM2 privileged server data.
+local function objectType(obj)
+    if not obj:IsA("BasePart") and not obj:IsA("Model") then return nil end
+    local name = obj.Name:lower()
+    if (name == "gundrop" or name == "droppedgun" or name == "dropped_gun") then
+        return "Gun"
+    elseif name == "knifedrop" or name == "droppedknife" or name == "dropped_knife" then
+        return "Knife"
+    elseif name == "coin" or name == "coinpart" then
+        return "Coin"
+    end
+    return nil
+end
+local function clearObject(obj)
+    local e = objectEffects[obj]
+    if not e then return end
+    e.highlight:Destroy()
+    e.billboard:Destroy()
+    objectEffects[obj] = nil
+end
+local function ensureObject(obj)
+    if objectEffects[obj] then return end
+    if not obj:IsDescendantOf(Workspace) then return end
+    local kind = objectType(obj)
+    if not kind then return end
+    local anchor = obj:IsA("BasePart") and obj or obj:FindFirstChildWhichIsA("BasePart", true)
+    if not anchor then return end
+    if kind == "Gun" and not enabled.GunESP then return end
+    if kind == "Coin" and not enabled.CoinESP then return end
+    if kind == "Knife" and not enabled.KnifeESP then return end
+    if (function()
+        local count = 0
+        for _ in pairs(objectEffects) do count = count + 1 end
+        return count
+    end)() >= 90 then return end
+    local color = kind == "Gun" and Color3.fromRGB(255, 209, 64)
+        or kind == "Knife" and Color3.fromRGB(255, 95, 112)
+        or Color3.fromRGB(125, 255, 129)
+    local h = Instance.new("Highlight")
+    h.Name = "LearningHubObjectHighlight"
+    h.Adornee = obj
+    h.FillColor = color
+    h.OutlineColor = color
+    h.FillTransparency = 0.58
+    h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    h.Parent = effectsFolder
+    local bb = Instance.new("BillboardGui")
+    bb.Adornee = anchor
+    bb.Size = UDim2.fromOffset(130, 34)
+    bb.AlwaysOnTop = true
+    bb.StudsOffsetWorldSpace = Vector3.new(0, 2, 0)
+    bb.Parent = gui
+    local t = Instance.new("TextLabel")
+    t.Size = UDim2.fromScale(1, 1)
+    t.TextColor3 = color
+    t.TextStrokeTransparency = 0.15
+    t.BackgroundTransparency = 1
+    t.Font = Enum.Font.GothamBold
+    t.TextSize = 13
+    t.Parent = bb
+    objectEffects[obj] = { highlight = h, billboard = bb, text = t, kind = kind, anchor = anchor }
+end
+local function scanObjects()
+    if not enabled.GunESP and not enabled.CoinESP and not enabled.KnifeESP then
+        for obj in pairs(objectEffects) do clearObject(obj) end
+        return
+    end
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if objectType(obj) then ensureObject(obj) end
+    end
+end
+local function updateObjects()
+    for obj, e in pairs(objectEffects) do
+        if not obj:IsDescendantOf(Workspace)
+            or (e.kind == "Gun" and not enabled.GunESP)
+            or (e.kind == "Coin" and not enabled.CoinESP)
+            or (e.kind == "Knife" and not enabled.KnifeESP) then
+            clearObject(obj)
+        else
+            local d = e.anchor.Parent and distanceTo(e.anchor)
+            e.text.Text = e.kind .. (d and (" • %d studs"):format(d) or "")
+        end
+    end
+end
+watch(Workspace.DescendantAdded:Connect(function(obj)
+    if objectType(obj) then task.defer(function()
+        if not destroyed and obj.Parent then ensureObject(obj) end
+    end) end
+end))
+watch(Workspace.DescendantRemoving:Connect(function(obj)
+    if objectEffects[obj] then clearObject(obj) end
+end))
+
+-- Movement and local utilities ----------------------------------------
+local function restoreNoclip()
+    for part, value in pairs(originalCollisions) do
+        if part.Parent then part.CanCollide = value end
+    end
+    table.clear(originalCollisions)
+end
+local function stopFly()
+    if flyVelocity then flyVelocity:Destroy() end
+    if flyAttachment then flyAttachment:Destroy() end
+    flyVelocity, flyAttachment, flyRoot = nil, nil, nil
+    local humanoid = humanOf(localPlayer)
+    if humanoid then pcall(function()
+        humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+    end) end
+end
+local function setupFly()
+    local root = rootOf(localPlayer)
+    if not root then return end
+    if flyRoot == root and flyVelocity and flyVelocity.Parent then return end
+    stopFly()
+    local a = Instance.new("Attachment")
+    a.Name = "LearningHubFlyAttachment"
+    a.Parent = root
+    local velocity = Instance.new("LinearVelocity")
+    velocity.Name = "LearningHubFlyVelocity"
+    velocity.Attachment0 = a
+    velocity.RelativeTo = Enum.ActuatorRelativeTo.World
+    velocity.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
+    velocity.MaxForce = 100000
+    velocity.VectorVelocity = Vector3.zero
+    velocity.Parent = root
+    flyAttachment, flyVelocity, flyRoot = a, velocity, root
+end
+local function applyCharacterSettings()
+    local humanoid = humanOf(localPlayer)
+    if humanoid then
+        humanoid.WalkSpeed = enabled.Sprint and numbers.Speed or 16
+        humanoid.UseJumpPower = true
+        humanoid.JumpPower = enabled.CustomJump and numbers.Jump or 50
+    end
+end
+watch(localPlayer.CharacterAdded:Connect(function()
+    restoreNoclip()
+    stopFly()
+    task.delay(0.5, function()
+        if not destroyed then applyCharacterSettings() end
+    end)
+end))
+watch(UserInputService.JumpRequest:Connect(function()
+    if enabled.InfiniteJump then
+        local humanoid = humanOf(localPlayer)
+        if humanoid and humanoid.Health > 0 then
+            humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+        end
+    end
+end))
+
+local function setFullbright(on)
+    if on then
+        Lighting.Brightness = 3
+        Lighting.ClockTime = 14
+        Lighting.Ambient = Color3.fromRGB(180, 180, 180)
+        Lighting.OutdoorAmbient = Color3.fromRGB(180, 180, 180)
+        Lighting.GlobalShadows = false
+        Lighting.FogEnd = 100000
+    else
+        for property, value in pairs(lightOriginal) do
+            Lighting[property] = value
+        end
+    end
+end
+local function setLowFX(on)
+    if on then
+        for _, child in ipairs(Lighting:GetChildren()) do
+            if child:IsA("PostEffect") then
+                if originalFX[child] == nil then originalFX[child] = child.Enabled end
+                child.Enabled = false
+            end
+        end
+    else
+        for effect, original in pairs(originalFX) do
+            if effect.Parent then effect.Enabled = original end
+        end
+        table.clear(originalFX)
+    end
+end
+
+local function setNoFog(on)
+    if on then
+        Lighting.FogStart = 0
+        Lighting.FogEnd = 100000
+        for _, effect in ipairs(Lighting:GetChildren()) do
+            if effect:IsA("Atmosphere") then
+                if not fogOriginal[effect] then
+                    fogOriginal[effect] = {Density = effect.Density, Haze = effect.Haze}
+                end
+                effect.Density = 0
+                effect.Haze = 0
+            end
+        end
+    else
+        Lighting.FogStart = lightOriginal.FogStart
+        Lighting.FogEnd = lightOriginal.FogEnd
+        for atmosphere, original in pairs(fogOriginal) do
+            if atmosphere.Parent then
+                atmosphere.Density = original.Density
+                atmosphere.Haze = original.Haze
+            end
+        end
+        table.clear(fogOriginal)
+    end
+end
+local function setHideOwnName(on)
+    local hum = humanOf(localPlayer)
+    if not hum then return end
+    if on then
+        if ownNameOriginal[hum] == nil then
+            ownNameOriginal[hum] = hum.DisplayDistanceType
+        end
+        hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+    elseif ownNameOriginal[hum] then
+        hum.DisplayDistanceType = ownNameOriginal[hum]
+        ownNameOriginal[hum] = nil
+    end
+end
+
+local function otherPlayers()
+    local list = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= localPlayer then table.insert(list, p) end
+    end
+    table.sort(list, function(a, b) return a.Name:lower() < b.Name:lower() end)
+    return list
+end
+local function chooseNextPlayer()
+    local list = otherPlayers()
+    if #list == 0 then
+        selectedPlayer = nil
+        inform("No other players to select")
+        return
+    end
+    local current = 0
+    for i, p in ipairs(list) do
+        if p == selectedPlayer then current = i break end
+    end
+    selectedPlayer = list[(current % #list) + 1]
+    inform("Selected: " .. selectedPlayer.DisplayName .. " (@" .. selectedPlayer.Name .. ")")
+end
+local function restoreCamera()
+    spectateTarget = nil
+    enabled.CameraLock = false
+    local camera = Workspace.CurrentCamera
+    local humanoid = humanOf(localPlayer)
+    if camera and humanoid then
+        camera.CameraType = Enum.CameraType.Custom
+        camera.CameraSubject = humanoid
+    end
+end
+local function spectate()
+    if not selectedPlayer or not humanOf(selectedPlayer) then
+        inform("Select a live player first")
+        return
+    end
+    spectateTarget = selectedPlayer
+    enabled.CameraLock = false
+    local camera = Workspace.CurrentCamera
+    if camera then
+        camera.CameraType = Enum.CameraType.Custom
+        camera.CameraSubject = humanOf(selectedPlayer)
+        inform("Spectating " .. selectedPlayer.DisplayName)
+    end
+end
+local function moveNear(p)
+    local root = rootOf(p)
+    local own = rootOf(localPlayer)
+    if not root or not own then inform("Target isn't spawned") return end
+    own.CFrame = root.CFrame * CFrame.new(3, 0, 0)
+    inform("Local teleport attempted • server may correct it")
+end
+local function findHint(kind)
+    for _, p in ipairs(otherPlayers()) do
+        if alive(p) and visibleWeaponHint(p) == kind then return p end
+    end
+    return nil
+end
+local function findRoleTarget(roleWanted)
+    local fallback
+    for _, p in ipairs(otherPlayers()) do
+        if alive(p) then
+            local role, source = getRole(p)
+            if role == roleWanted then
+                if source == "game" then return p, "game" end
+                fallback = fallback or p
+            end
+        end
+    end
+    return fallback, fallback and "hint" or "none"
+end
+local function selectRole(role)
+    local p, source = findRoleTarget(role)
+    if not p then
+        inform("No " .. role .. " identified yet")
+        return nil
+    end
+    selectedPlayer = p
+    inform(role .. (source == "hint" and " (unconfirmed tool)" or " (game data)") .. ": " .. p.Name)
+    return p
+end
+local function findNearestObject(kind)
+    local own = rootOf(localPlayer)
+    if not own then return nil end
+    local closest, bestDistance = nil, math.huge
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if objectType(obj) == kind then
+            local anchor = obj:IsA("BasePart") and obj or obj:FindFirstChildWhichIsA("BasePart", true)
+            if anchor then
+                local d = (anchor.Position - own.Position).Magnitude
+                if d < bestDistance then closest, bestDistance = anchor, d end
+            end
+        end
+    end
+    return closest
+end
+local function tpNearObject(kind)
+    local target = findNearestObject(kind)
+    local root = rootOf(localPlayer)
+    if not root or not target then
+        inform("No " .. kind .. " object found")
+        return
+    end
+    root.CFrame = target.CFrame * CFrame.new(0, 3, 0)
+    inform("Local teleport attempted • " .. kind)
+end
+local function tpCrosshair()
+    local camera = Workspace.CurrentCamera
+    local root = rootOf(localPlayer)
+    if not camera or not root then return inform("Character/camera not ready") end
+    local size = camera.ViewportSize
+    local ray = camera:ViewportPointToRay(size.X / 2, size.Y / 2)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {characterOf(localPlayer)}
+    local hit = Workspace:Raycast(ray.Origin, ray.Direction * 450, params)
+    if not hit then return inform("No surface at center of screen") end
+    root.CFrame = CFrame.new(hit.Position + Vector3.new(0, 4, 0))
+    inform("Crosshair teleport attempted")
+end
+local function createDemoPart(name, color)
+    local root = rootOf(localPlayer)
+    if not root then inform("Spawn your character first") return end
+    local part = Instance.new("Part")
+    part.Name = name
+    part.Anchored = true
+    part.CanCollide = false
+    part.Size = Vector3.new(2, 2, 2)
+    part.Shape = Enum.PartType.Ball
+    part.Material = Enum.Material.Neon
+    part.Color = color
+    part.CFrame = root.CFrame * CFrame.new(0, 2, -12)
+    part.Parent = Workspace
+    table.insert(demoParts, part)
+    ensureObject(part)
+    inform("Spawned local-only " .. name .. " demo")
+end
+
+-- Role radar ----------------------------------------------------------
+heading(rolesPage, "ROLE RADAR  /  LIVE")
+label(rolesPage,
+    "Red: Murderer  •  Blue: Sheriff  •  Gold: Hero  •  Green: Innocent. " ..
+    "A question mark means a visible weapon hint, not a confirmed role.",
+    58, Color3.fromRGB(184, 207, 228), 12)
+makeButton(rolesPage, "Refresh MM2 role feed", function()
+    lastRoleFetch = -100
+    refreshRoles()
+    inform("Requested MM2 role refresh")
+end)
+toggle(rolesPage, "Notify when game roles change", "RoleAlerts")
+local roleDataLine = label(rolesPage, "Checking MM2 game role data...", 36, Color3.fromRGB(160, 205, 232), 12)
+roleDataLine.TextWrapped = true
+local roleSearch = Instance.new("TextBox")
+roleSearch.Name = "PlayerSearch"
+roleSearch.Size = UDim2.new(1, -3, 0, 39)
+roleSearch.BackgroundColor3 = Color3.fromRGB(31, 44, 65)
+roleSearch.TextColor3 = Color3.fromRGB(243, 247, 255)
+roleSearch.PlaceholderColor3 = Color3.fromRGB(155, 174, 194)
+roleSearch.PlaceholderText = "Search players by name..."
+roleSearch.Text = ""
+roleSearch.ClearTextOnFocus = false
+roleSearch.Font = Enum.Font.Gotham
+roleSearch.TextSize = 13
+roleSearch.Parent = rolesPage
+round(roleSearch, 10)
+heading(rolesPage, "QUICK ROLE TARGETS")
+makeButton(rolesPage, "Select murderer (game data or tool hint)", function() selectRole("Murderer") end)
+makeButton(rolesPage, "Select sheriff (game data or tool hint)", function() selectRole("Sheriff") end)
+makeButton(rolesPage, "Spectate selected player", spectate)
+makeButton(rolesPage, "Return to my character", restoreCamera)
+heading(rolesPage, "PLAYER LIST  /  TAP TO SELECT")
+local roleList = Instance.new("Frame")
+roleList.Name = "PlayerRoster"
+roleList.BackgroundTransparency = 1
+roleList.Size = UDim2.new(1, -3, 0, 0)
+roleList.AutomaticSize = Enum.AutomaticSize.Y
+roleList.Parent = rolesPage
+local roleListLayout = Instance.new("UIListLayout")
+roleListLayout.Padding = UDim.new(0, 5)
+roleListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+roleListLayout.Parent = roleList
+local roleRows = {}
+local function updateRoleRadar()
+    local murderer, sheriff, hero = "?", "?", "?"
+    local known = 0
+    for _, p in ipairs(Players:GetPlayers()) do
+        local role, source = getRole(p)
+        if source == "game" then
+            known += 1
+            if role == "Murderer" then murderer = p.DisplayName end
+            if role == "Sheriff" then sheriff = p.DisplayName end
+            if role == "Hero" then hero = p.DisplayName end
+        end
+    end
+    local signature = murderer .. "/" .. sheriff .. "/" .. hero
+    if enabled.RoleAlerts and known > 0 and signature ~= roleChangeSignature then
+        if roleChangeSignature ~= "" then
+            inform("Role update • Murderer: " .. murderer .. " • Sheriff: " .. sheriff)
+        end
+        roleChangeSignature = signature
+    end
+    if known == 0 then
+        for _, p in ipairs(Players:GetPlayers()) do
+            local role, source = getRole(p)
+            if source == "hint" then
+                if role == "Murderer" then murderer = p.DisplayName .. "?" end
+                if role == "Sheriff" then sheriff = p.DisplayName .. "?" end
+            end
+        end
+    end
+    local prefix = known > 0 and "GAME DATA" or "TOOL HINTS"
+    roleStrip.Text = " " .. prefix .. "  •  M: " .. murderer .. "   S: " .. sheriff
+    roleDataLine.Text = roleSyncMessage .. (known > 0 and ("  |  " .. known .. " confirmed") or "")
+    local current = {}
+    local search = roleSearch.Text:lower()
+    for _, p in ipairs(otherPlayers()) do
+        current[p] = true
+        local row = roleRows[p]
+        if not row then
+            row = makeButton(roleList, "", function()
+                selectedPlayer = p
+                inform("Selected " .. p.DisplayName .. " (@" .. p.Name .. ")")
+            end)
+            roleRows[p] = row
+        end
+        local role, source = getRole(p)
+        local display = roleDisplay(role, source)
+        row.Text = (selectedPlayer == p and "▸ " or "   ") .. p.DisplayName .. "   •   " .. display
+        row.TextColor3 = getRoleColor(role, source)
+        row.BackgroundColor3 = selectedPlayer == p and Color3.fromRGB(38, 66, 84)
+            or Color3.fromRGB(28, 39, 59)
+        row.Visible = search == "" or p.Name:lower():find(search, 1, true) ~= nil
+            or p.DisplayName:lower():find(search, 1, true) ~= nil
+    end
+    for p, row in pairs(roleRows) do
+        if not current[p] then row:Destroy() roleRows[p] = nil end
+    end
+end
+
+-- Visuals page --------------------------------------------------------
+heading(visualsPage, "PLAYER HIGHLIGHTS")
+toggle(visualsPage, "Color ESP by roles", "RoleESP")
+toggle(visualsPage, "Show role labels", "ShowRoles")
+toggle(visualsPage, "Only Sheriff / Murderer / Hero", "ThreatsOnly")
+toggle(visualsPage, "Limit ESP distance", "RangeLimit")
+makeButton(visualsPage, "Decrease ESP range by 50 studs", function()
+    numbers.ESPRange = math.max(50, numbers.ESPRange - 50)
+    inform("ESP range: " .. numbers.ESPRange .. " studs")
+end)
+makeButton(visualsPage, "Increase ESP range by 50 studs", function()
+    numbers.ESPRange = math.min(1500, numbers.ESPRange + 50)
+    inform("ESP range: " .. numbers.ESPRange .. " studs")
+end)
+toggle(visualsPage, "Player ESP", "PlayerESP")
+toggle(visualsPage, "Show names", "Names")
+toggle(visualsPage, "Show distance", "Distances")
+toggle(visualsPage, "Health labels", "Health")
+toggle(visualsPage, "Visible weapon hints", "WeaponHints")
+toggle(visualsPage, "Through-wall outlines", "XRay")
+toggle(visualsPage, "Tracer beams", "Tracers")
+toggle(visualsPage, "Rainbow outlines", "Rainbow")
+heading(visualsPage, "MAP OBJECT MARKERS")
+toggle(visualsPage, "Dropped gun markers", "GunESP", function() scanObjects() end)
+toggle(visualsPage, "Dropped knife markers", "KnifeESP", function() scanObjects() end)
+toggle(visualsPage, "Coin markers", "CoinESP", function() scanObjects() end)
+label(visualsPage, "Game roles update every six seconds when the MM2 role feed is accessible. " ..
+    "Otherwise tool colors and question marks are observations only.", 55,
+    Color3.fromRGB(160, 173, 194), 12)
+
+-- Movement page -------------------------------------------------------
+heading(movementPage, "Character controls")
+toggle(movementPage, "Custom walkspeed", "Sprint", applyCharacterSettings)
+makeButton(movementPage, "Walkspeed -5", function()
+    numbers.Speed = math.max(8, numbers.Speed - 5)
+    applyCharacterSettings()
+    inform("Custom walkspeed: " .. numbers.Speed)
+end)
+makeButton(movementPage, "Walkspeed +5", function()
+    numbers.Speed = math.min(75, numbers.Speed + 5)
+    applyCharacterSettings()
+    inform("Custom walkspeed: " .. numbers.Speed)
+end)
+toggle(movementPage, "Custom jump power", "CustomJump", applyCharacterSettings)
+makeButton(movementPage, "Jump power -10", function()
+    numbers.Jump = math.max(30, numbers.Jump - 10)
+    applyCharacterSettings()
+    inform("Jump power: " .. numbers.Jump)
+end)
+makeButton(movementPage, "Jump power +10", function()
+    numbers.Jump = math.min(150, numbers.Jump + 10)
+    applyCharacterSettings()
+    inform("Jump power: " .. numbers.Jump)
+end)
+toggle(movementPage, "Infinite jump", "InfiniteJump")
+toggle(movementPage, "Anti-fling velocity cap", "AntiFling")
+toggle(movementPage, "Noclip (local)", "Noclip", function(on)
+    if not on then restoreNoclip() end
+end)
+toggle(movementPage, "Fly (experimental)", "Fly", function(on)
+    if not on then stopFly() else setupFly() end
+end)
+local function holdButton(page, name, setter)
+    local b = makeButton(page, name .. " (hold)", function() end)
+    watch(b.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            setter(true)
+        end
+    end))
+    watch(b.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            setter(false)
+        end
+    end))
+end
+holdButton(movementPage, "Fly UP", function(value) flyUp = value end)
+holdButton(movementPage, "Fly DOWN", function(value) flyDown = value end)
+makeButton(movementPage, "Fly speed +10", function()
+    numbers.FlySpeed = math.min(120, numbers.FlySpeed + 10)
+    inform("Fly speed: " .. numbers.FlySpeed)
+end)
+makeButton(movementPage, "Fly speed -10", function()
+    numbers.FlySpeed = math.max(10, numbers.FlySpeed - 10)
+    inform("Fly speed: " .. numbers.FlySpeed)
+end)
+makeButton(movementPage, "Camera FOV +10", function()
+    numbers.FOV = math.min(110, numbers.FOV + 10)
+    if Workspace.CurrentCamera then Workspace.CurrentCamera.FieldOfView = numbers.FOV end
+    inform("Field of view: " .. numbers.FOV)
+end)
+makeButton(movementPage, "Camera FOV -10", function()
+    numbers.FOV = math.max(40, numbers.FOV - 10)
+    if Workspace.CurrentCamera then Workspace.CurrentCamera.FieldOfView = numbers.FOV end
+    inform("Field of view: " .. numbers.FOV)
+end)
+makeButton(movementPage, "Reset movement values", function()
+    enabled.Sprint = false
+    enabled.CustomJump = false
+    enabled.Noclip = false
+    enabled.Fly = false
+    restoreNoclip()
+    stopFly()
+    applyCharacterSettings()
+    numbers.FOV = previousFOV
+    if Workspace.CurrentCamera then Workspace.CurrentCamera.FieldOfView = previousFOV end
+    for _, refresh in ipairs(toggleUpdaters) do refresh() end
+    inform("Movement reset")
+end)
+
+-- Tools page ----------------------------------------------------------
+heading(toolsPage, "Players and camera")
+makeButton(toolsPage, "Select next player", chooseNextPlayer)
+makeButton(toolsPage, "Spectate selected", spectate)
+makeButton(toolsPage, "Return to my camera", restoreCamera)
+makeButton(toolsPage, "Look at selected (ON/OFF)", function()
+    if not selectedPlayer or not rootOf(selectedPlayer) then
+        inform("Select a spawned player first") return
+    end
+    restoreCamera()
+    enabled.CameraLock = true
+    inform("Camera tracking selected • tap Return to stop")
+end)
+heading(toolsPage, "Teleports (may be server-corrected)")
+makeButton(toolsPage, "Teleport near identified Murderer", function()
+    local p = selectRole("Murderer")
+    if p then moveNear(p) end
+end)
+makeButton(toolsPage, "Teleport near identified Sheriff", function()
+    local p = selectRole("Sheriff")
+    if p then moveNear(p) end
+end)
+makeButton(toolsPage, "Teleport near selected", function()
+    if selectedPlayer then moveNear(selectedPlayer) else inform("Select a player") end
+end)
+makeButton(toolsPage, "Teleport near visible Knife", function()
+    local p = findHint("Knife visible")
+    if p then moveNear(p) else inform("No equipped Knife detected") end
+end)
+makeButton(toolsPage, "Teleport near visible Gun", function()
+    local p = findHint("Gun visible")
+    if p then moveNear(p) else inform("No equipped Gun detected") end
+end)
+makeButton(toolsPage, "Teleport to nearest named GunDrop", function()
+    local closest, bestDist = nil, math.huge
+    local own = rootOf(localPlayer)
+    if not own then inform("Character not spawned") return end
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if objectType(obj) == "Gun" then
+            local anchor = obj:IsA("BasePart") and obj or obj:FindFirstChildWhichIsA("BasePart", true)
+            if anchor then
+                local d = (anchor.Position - own.Position).Magnitude
+                if d < bestDist then closest, bestDist = anchor, d end
+            end
+        end
+    end
+    if closest then
+        own.CFrame = closest.CFrame * CFrame.new(0, 3, 0)
+        inform("GunDrop proximity teleport attempted")
+    else
+        inform("No named GunDrop object found")
+    end
+end)
+makeButton(toolsPage, "Teleport to closest Coin", function() tpNearObject("Coin") end)
+makeButton(toolsPage, "Teleport to dropped Knife", function() tpNearObject("Knife") end)
+makeButton(toolsPage, "Teleport to crosshair target", tpCrosshair)
+makeButton(toolsPage, "Teleport near random player", function()
+    local list = otherPlayers()
+    if #list == 0 then inform("No other players") return end
+    moveNear(list[math.random(1, #list)])
+end)
+makeButton(toolsPage, "Find and teleport to Lobby", function()
+    local place = Workspace:FindFirstChild("Lobby", true)
+    if not place then inform("No object named Lobby found") return end
+    local destination
+    if place:IsA("BasePart") then destination = place.CFrame
+    elseif place:IsA("Model") then destination = place:GetPivot() end
+    local root = rootOf(localPlayer)
+    if destination and root then
+        root.CFrame = destination * CFrame.new(0, 5, 0)
+        inform("Lobby teleport attempted")
+    else
+        inform("Lobby object wasn't a Part or Model")
+    end
+end)
+heading(toolsPage, "Client-only test objects")
+makeButton(toolsPage, "Spawn demo GunDrop", function()
+    createDemoPart("GunDrop", Color3.fromRGB(255, 213, 70))
+end)
+makeButton(toolsPage, "Spawn demo Coin", function()
+    createDemoPart("Coin", Color3.fromRGB(107, 255, 122))
+end)
+
+-- Settings page -------------------------------------------------------
+heading(settingsPage, "Visual settings")
+toggle(settingsPage, "Fullbright", "Fullbright", setFullbright)
+toggle(settingsPage, "Remove fog and atmosphere haze", "NoFog", setNoFog)
+toggle(settingsPage, "Hide my overhead name (local)", "HideOwnName", setHideOwnName)
+toggle(settingsPage, "Reduce sliding on ice (local)", "AntiSlip")
+toggle(settingsPage, "Disable post-processing FX", "LowFX", setLowFX)
+toggle(settingsPage, "Anti-void (experimental)", "AntiVoid")
+makeButton(settingsPage, "Reset gravity", function()
+    Workspace.Gravity = previousGravity
+    inform("Gravity restored")
+end)
+makeButton(settingsPage, "Decrease local gravity by 20", function()
+    Workspace.Gravity = math.max(30, Workspace.Gravity - 20)
+    inform("Local gravity: " .. math.floor(Workspace.Gravity))
+end)
+makeButton(settingsPage, "Increase local gravity by 20", function()
+    Workspace.Gravity = math.min(300, Workspace.Gravity + 20)
+    inform("Local gravity: " .. math.floor(Workspace.Gravity))
+end)
+heading(settingsPage, "Session")
+makeButton(settingsPage, "Show player count", function()
+    inform("Players in server: " .. #Players:GetPlayers())
+end)
+makeButton(settingsPage, "Rejoin this place", function()
+    if RunService:IsStudio() then inform("Rejoin isn't available in Studio playtest") return end
+    local ok, err = pcall(function() TeleportService:Teleport(game.PlaceId, localPlayer) end)
+    if not ok then inform("Rejoin failed: " .. tostring(err):sub(1, 60)) end
+end)
+label(settingsPage, "Role radar reads game-reported data only when MM2 exposes it. " ..
+    "Features here run on your client; teleports and movement may be server-corrected. " ..
+    "No remote kill-all, forced wins, or trade manipulation.",
+    85, Color3.fromRGB(180, 193, 213), 12)
+
+-- A single heartbeat for periodic state updates.
+watch(RunService.Heartbeat:Connect(function(delta)
+    if destroyed then return end
+    local now = os.clock()
+    local cameraNow = Workspace.CurrentCamera
+    if cameraNow then
+        local updatedView = cameraNow.ViewportSize
+        if math.abs(updatedView.X - viewport.X) > 8 or math.abs(updatedView.Y - viewport.Y) > 8 then
+            viewport = updatedView
+            width = math.clamp(viewport.X - 22, 270, 392)
+            height = math.clamp(viewport.Y - 65, 330, 530)
+            window.Size = UDim2.fromOffset(width, height)
+            window.Position = UDim2.fromOffset(
+                math.clamp(window.Position.X.Offset, 0, math.max(0, viewport.X - 70)),
+                math.clamp(window.Position.Y.Offset, 0, math.max(0, viewport.Y - 45)))
+        end
+    end
+    local ownRoot = rootOf(localPlayer)
+    if enabled.Noclip then
+        local char = characterOf(localPlayer)
+        if char then
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    if originalCollisions[part] == nil then
+                        originalCollisions[part] = part.CanCollide
+                    end
+                    part.CanCollide = false
+                end
+            end
+        end
+    end
+    if enabled.Fly then
+        setupFly()
+        local humanoid = humanOf(localPlayer)
+        if humanoid and flyVelocity and flyRoot then
+            local v = humanoid.MoveDirection * numbers.FlySpeed
+            local y = (flyUp and 1 or 0) - (flyDown and 1 or 0)
+            flyVelocity.VectorVelocity = v + Vector3.new(0, y * numbers.FlySpeed, 0)
+        end
+    end
+    if spectateTarget and (not spectateTarget.Parent or not alive(spectateTarget)) then
+        restoreCamera()
+    end
+    if enabled.AntiFling and ownRoot and ownRoot.AssemblyLinearVelocity.Magnitude > 160 then
+        ownRoot.AssemblyLinearVelocity = Vector3.zero
+        inform("Excessive local velocity damped")
+    end
+    if enabled.AntiSlip and ownRoot then
+        local hum = humanOf(localPlayer)
+        if hum and hum.FloorMaterial == Enum.Material.Ice then
+            local v = ownRoot.AssemblyLinearVelocity
+            local dir = hum.MoveDirection
+            local targetSpeed = hum.WalkSpeed
+            ownRoot.AssemblyLinearVelocity = Vector3.new(dir.X * targetSpeed, v.Y, dir.Z * targetSpeed)
+        end
+    end
+    if enabled.AntiVoid and ownRoot then
+        local humanoid = humanOf(localPlayer)
+        if ownRoot.Position.Y > -10 and humanoid and humanoid.FloorMaterial ~= Enum.Material.Air then
+            lastSafeCFrame = ownRoot.CFrame
+        elseif ownRoot.Position.Y < -45 and lastSafeCFrame then
+            ownRoot.CFrame = lastSafeCFrame * CFrame.new(0, 5, 0)
+            inform("Anti-void recovery attempted")
+        end
+    end
+    if now - lastVisualTick >= 0.5 then
+        lastVisualTick = now
+        if now - lastRoleFetch >= 6 then
+            lastRoleFetch = now
+            refreshRoles()
+        end
+        if now - lastRoleUI >= 1.1 then
+            lastRoleUI = now
+            updateRoleRadar()
+        end
+        updatePlayerEffects(now)
+        updateTracers()
+        updateObjects()
+        -- Update already-enabled settings in case of respawn/map changes.
+        if enabled.Fullbright then setFullbright(true) end
+        if enabled.LowFX then setLowFX(true) end
+        if enabled.NoFog then setNoFog(true) end
+        if enabled.HideOwnName then setHideOwnName(true) end
+    end
+end))
+-- Priority after the default camera script, for explicit camera tracking.
+RunService:BindToRenderStep("LearningHub_Camera_" .. tostring(localPlayer.UserId),
+    Enum.RenderPriority.Camera.Value + 1, function()
+        if destroyed or not enabled.CameraLock then return end
+        local camera = Workspace.CurrentCamera
+        local root = rootOf(selectedPlayer)
+        if camera and root then
+            camera.CFrame = CFrame.lookAt(camera.CFrame.Position, root.Position + Vector3.new(0, 2, 0))
+        end
+    end)
+local cameraStepName = "LearningHub_Camera_" .. tostring(localPlayer.UserId)
+
+local function unload()
+    if destroyed then return end
+    destroyed = true
+    for _, c in ipairs(connections) do c:Disconnect() end
+    RunService:UnbindFromRenderStep(cameraStepName)
+    restoreNoclip()
+    stopFly()
+    restoreCamera()
+    for p in pairs(playerEffects) do destroyPlayerEffect(p) end
+    for p in pairs(tracerEffects) do clearTracer(p) end
+    for obj in pairs(objectEffects) do clearObject(obj) end
+    for _, part in ipairs(demoParts) do if part.Parent then part:Destroy() end end
+    effectsFolder:Destroy()
+    setLowFX(false)
+    setFullbright(false)
+    setNoFog(false)
+    for hum, prior in pairs(ownNameOriginal) do
+        if hum.Parent then hum.DisplayDistanceType = prior end
+    end
+    Workspace.Gravity = previousGravity
+    local camera = Workspace.CurrentCamera
+    if camera then camera.FieldOfView = previousFOV end
+    local humanoid = humanOf(localPlayer)
+    if humanoid then
+        humanoid.WalkSpeed = 16
+        humanoid.UseJumpPower = true
+        humanoid.JumpPower = 50
+    end
+    gui:Destroy()
+    if environment.MM2LearningHubUnload == unload then
+        environment.MM2LearningHubUnload = nil
+    end
+end
+environment.MM2LearningHubUnload = unload
+watch(close.MouseButton1Click:Connect(unload))
+
+-- First pass only once when launched.
+applyCharacterSettings()
+refreshRoles()
+updateRoleRadar()
+inform("SPECTRA v2 loaded • MM2 role sync requested")
+print("SPECTRA MM2 Hub v2 loaded. Close with X to unload.")
