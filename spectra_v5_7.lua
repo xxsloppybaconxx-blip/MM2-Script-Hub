@@ -1497,6 +1497,9 @@ local function resetFarmTracking()
     farmFocus, farmFocusStart, farmProgressDistance = nil, 0, math.huge
     farmAttempts, farmSkipped, farmLastScan = 0, 0, 0
     farmNotice = "Tracking cleared"
+    v54.postFarmFinished = false
+    v54.postFarmIdleSince = nil
+    v54.postFarmStatus = "Ready"
 end
 
 local function getNearestGun()
@@ -1514,7 +1517,11 @@ local function setFarmEnabled(on)
             v54.updateFlyHUD()
         end
         farmFocus, farmFocusStart, farmProgressDistance = nil, 0, math.huge
-        inform("Farm started • visit count is NOT confirmed pickups")
+        v54.postFarmFinished = false
+        v54.postFarmIdleSince = nil
+        v54.postActionToken += 1
+        v54.postFarmStatus = "Farm running • waiting for eligible coins"
+        inform("Farm started • visits are not confirmed pickups")
     else
         v54.farmTravelToken += 1
         local humanoid = humanOf(localPlayer)
@@ -1907,6 +1914,74 @@ local function attemptMurdererShot(manual)
             or ("Gun remote error: " .. tostring(err):sub(1, 65))
         if manual or not ok then inform(shotNotice) end
     end)
+end
+-- Optional post-farm behavior. Visits are never treated as confirmed rewards.
+v54.finishFarm = function(reason)
+    if destroyed or v54.postFarmFinished then return end
+    v54.postFarmFinished = true
+    enabled.AutoCoinFarm = false
+    v54.farmTravelToken += 1
+    local message = "Farm paused: " .. reason .. " (" .. farmAttempts .. " visits, rewards unverified)"
+    farmNotice = message
+    v54.postFarmStatus = message
+    for _, update in ipairs(toggleUpdaters) do update() end
+    if v54.postFarmMode ~= "role" then inform(message); return end
+    local role, source = getRole(localPlayer)
+    if source ~= "game" then
+        v54.postFarmStatus = "No confirmed role: no post-farm action taken"
+        inform(v54.postFarmStatus)
+        return
+    end
+    if role == "Sheriff" or role == "Hero" then
+        enabled.AutoAimMurderer = true
+        enabled.AimAssist = false
+        attemptMurdererShot(true)
+        v54.postFarmStatus = "Sheriff/Hero: aim ON; one gun shot attempted (unconfirmed)"
+        inform(v54.postFarmStatus)
+    elseif role == "Innocent" then
+        local humanoid = humanOf(localPlayer)
+        if humanoid and humanoid.Health > 0 then
+            humanoid.Health = 0
+            v54.postFarmStatus = "Innocent: local reset requested (server result unknown)"
+        else
+            v54.postFarmStatus = "Innocent: no live Humanoid to reset"
+        end
+        inform(v54.postFarmStatus)
+    elseif role == "Murderer" then
+        v54.postActionToken += 1
+        local token = v54.postActionToken
+        v54.postFarmStatus = "Murderer: starting knife-activation sweep (hits unverified)"
+        inform(v54.postFarmStatus)
+        task.spawn(function()
+            local attempts = 0
+            for _, opponent in ipairs(otherPlayers()) do
+                if destroyed or v54.postActionToken ~= token or not alive(localPlayer) then break end
+                if alive(opponent) then
+                    local char = characterOf(localPlayer)
+                    local ownRoot = rootOf(localPlayer)
+                    local targetRoot = rootOf(opponent)
+                    local humanoid = humanOf(localPlayer)
+                    local pack = localPlayer:FindFirstChildOfClass("Backpack")
+                    local knife = char and char:FindFirstChild("Knife") or pack and pack:FindFirstChild("Knife")
+                    if ownRoot and targetRoot and knife and knife:IsA("Tool") then
+                        if humanoid and knife.Parent ~= char then humanoid:EquipTool(knife) end
+                        pcall(function()
+                            ownRoot.CFrame = targetRoot.CFrame * CFrame.new(0, 0, 2)
+                            knife:Activate()
+                        end)
+                        attempts += 1
+                        task.wait(0.7)
+                    end
+                end
+            end
+            if destroyed or v54.postActionToken ~= token then return end
+            v54.postFarmStatus = "Murderer: " .. attempts .. " knife attempts, no confirmed eliminations"
+            inform(v54.postFarmStatus)
+        end)
+    else
+        v54.postFarmStatus = "Role " .. tostring(role) .. ": no post-farm action"
+        inform(v54.postFarmStatus)
+    end
 end
 -- GAMEPAD SUPPORT -------------------------------------------------------
 -- Roblox normally uses the two triggers for gameplay actions; we reserve
@@ -2410,6 +2485,18 @@ makeButton(farmPage, "Reset farm counters / stuck-target list", function()
     inform("Farm counters reset")
 end)
 local farmStats = label(farmPage, "Ready • 0 targets visited", 70, Color3.fromRGB(189, 221, 255), 14)
+heading(farmPage, "WHEN FARMING FINISHES")
+label(farmPage, "Completion means 10 seconds without eligible coin targets, or the visit limit. It does NOT prove your bag is full.",
+    64, Color3.fromRGB(206, 224, 250), 12)
+v54.postFarmModeButton = makeButton(farmPage, "After farm: NOTIFY ONLY (default)", function()
+    v54.postFarmMode = v54.postFarmMode == "notify" and "role" or "notify"
+    v54.postFarmModeButton.Text = v54.postFarmMode == "notify"
+        and "After farm: NOTIFY ONLY" or "After farm: ROLE ACTIONS (unverified)"
+    inform("After farm: " .. (v54.postFarmMode == "notify" and "notify only" or "role-dependent attempt"))
+end)
+label(farmPage, "Opt-in ROLE ACTIONS: Innocent requests local reset; Sheriff/Hero aims and tries one shot; Murderer attempts knife activations. The server may reject all these.",
+    102, Color3.fromRGB(234, 197, 151), 12)
+v54.postFarmInfo = label(farmPage, "Post-farm: not triggered", 56, Color3.fromRGB(164, 219, 242), 12)
 heading(farmPage, "DROPPED GUN")
 toggle(farmPage, "Auto-approach dropped gun", "AutoGunApproach", function(on)
     if on then enabled.AutoCoinFarm = false end
@@ -2419,6 +2506,7 @@ makeButton(farmPage, "Stop automation", function()
     enabled.AutoCoinFarm = false
     enabled.AutoGunApproach = false
     v54.farmTravelToken += 1
+    v54.postActionToken += 1
     local humanoid, root = humanOf(localPlayer), rootOf(localPlayer)
     if humanoid and root then humanoid:MoveTo(root.Position) end
     for _, refresh in ipairs(toggleUpdaters) do refresh() end
@@ -2789,6 +2877,7 @@ end)
 makeButton(diagnosticsPage, "STOP all automation and camera assist", function()
     enabled.AutoCoinFarm = false
     enabled.AutoGunApproach = false
+    v54.postActionToken += 1
     enabled.AimAssist = false
     enabled.AutoAimMurderer = false
     enabled.AutoShootMurderer = false
@@ -2817,13 +2906,12 @@ task.spawn(function()
                 if v54.farmFlightBusy then
                     farmNotice = v54.farmTravelDetail
                 elseif enabled.FarmVisitLimit and farmAttempts >= numbers.FarmVisitCap then
-                    enabled.AutoCoinFarm = false
                     hum:MoveTo(own.Position)
-                    farmNotice = "Paused at visit limit (not pickup count)"
-                    for _, refresh in ipairs(toggleUpdaters) do refresh() end
+                    v54.finishFarm("visit limit reached")
                 else
                     local target, dist = getNearestFarmCoin()
                     if target and target.Parent then
+                        v54.postFarmIdleSince = nil
                         if target ~= farmFocus then
                             farmFocus, farmFocusStart, farmProgressDistance = target, os.clock(), dist
                         end
@@ -2858,6 +2946,12 @@ task.spawn(function()
                         end
                     else
                         farmNotice = "No matching collectibles in range"
+                        if farmAttempts > 0 then
+                            v54.postFarmIdleSince = v54.postFarmIdleSince or os.clock()
+                            if os.clock() - v54.postFarmIdleSince > 10 then
+                                v54.finishFarm("no eligible coins for 10 seconds")
+                            end
+                        end
                     end
                 end
             elseif enabled.AutoGunApproach then
@@ -3027,6 +3121,7 @@ local function unload()
     enabled.AutoCoinFarm = false
     enabled.AutoGunApproach = false
     v54.farmTravelToken += 1
+    v54.postActionToken += 1
     enabled.AutoShootMurderer = false
     enabled.AutoAimMurderer = false
     v54.gamepadAimHeld, v54.gamepadFlyUp, v54.gamepadFlyDown = false, false, false
