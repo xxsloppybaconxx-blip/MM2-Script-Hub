@@ -791,6 +791,7 @@ end
 -- Touch/mouse value bars replace repeated +/- actions. Values continue to
 -- use the existing numbers table, so saved settings and behavior stay linked.
 v54.sliderRefreshers = {}
+v54.sliderControllers = {}
 v54.refreshSliders = function()
     for _, refresh in ipairs(v54.sliderRefreshers) do refresh() end
 end
@@ -904,6 +905,22 @@ local function makeSlider(page, caption, key, minimum, maximum, step, unit, onCh
             or (activeInput and activeInput.UserInputType == Enum.UserInputType.MouseButton1
                 and input.UserInputType == Enum.UserInputType.MouseButton1) then
             activeInput = nil
+        end
+    end))
+    -- When a controller selects a value bar, D-pad left/right changes
+    -- the value; the usual menu-tab navigation is suspended for that bar.
+    v54.sliderControllers[bar] = function(direction)
+        local snapped = numbers[key] + direction * step
+        snapped = math.clamp(math.floor(snapped * 1000 + 0.5) / 1000, minimum, maximum)
+        if numbers[key] ~= snapped then
+            numbers[key] = snapped
+            if onChanged then onChanged(snapped) end
+        end
+        refresh()
+    end
+    watch(bar.Activated:Connect(function()
+        if UserInputService.GamepadEnabled and GuiService.SelectedObject == bar then
+            v54.sliderControllers[bar](1)
         end
     end))
     table.insert(v54.sliderRefreshers, refresh)
@@ -3280,7 +3297,7 @@ v54.updateControllerStatus = function()
             or "auto aim/headshot")
         .. "  |  R1/RB: "
         .. (enabled.ControllerR1Shoot and "manual shoot" or "disabled")
-        .. "\nY/Triangle menu  •  D-pad ←/→ tabs  •  A select  •  B back"
+        .. "\nY/Triangle menu • D-pad ←/→ tabs or selected value bar • A select • B back"
         .. "\n" .. v54.lastGamepadInput
 end
 watch(UserInputService.InputBegan:Connect(function(input, processed)
@@ -4639,6 +4656,13 @@ watch(UserInputService.InputBegan:Connect(function(input, processed)
         return
     end
     if minimized then return end
+    local selected = GuiService.SelectedObject
+    local adjustSlider = selected and v54.sliderControllers[selected]
+    if adjustSlider and (key == Enum.KeyCode.DPadLeft or key == Enum.KeyCode.DPadRight) then
+        adjustSlider(key == Enum.KeyCode.DPadRight and 1 or -1)
+        v54.lastGamepadInput = "Value bar adjusted using D-pad"
+        return
+    end
     if key == Enum.KeyCode.DPadLeft or key == Enum.KeyCode.DPadRight then
         v54.gamepadMenuMode = true
     end
