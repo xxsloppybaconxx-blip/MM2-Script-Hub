@@ -2460,6 +2460,8 @@ local function flingSelected(targetOverride, onFinished)
             overlapParams.FilterDescendantsInstances = {target.Character}
             overlapParams.MaxParts = 12
             local started, lastUpdate, consecutiveOutOfRange = os.clock(), -1, 0
+            local lastSpinPlacement = -100
+            local spinCorrections = 0
             -- Position and apply impulses EVERY frame, not every 0.17 seconds.
             -- When the client accepts these local CFrame changes, the gap
             -- should read ~1.5 studs, as it did in the reference monitor.
@@ -2486,9 +2488,21 @@ local function flingSelected(targetOverride, onFinished)
                 local height = math.floor(elapsed / 0.20) % 2 == 0 and 1.45 or -1.45
                 local offset = Vector3.new(0.28 * math.sin(phase), height, 0.28 * math.cos(phase))
                 local intended = t.Position + offset
-                -- First placement occurs immediately: no 0.17s delay.
-                own.CFrame = CFrame.new(intended) * CFrame.Angles(0, phase * 1.8, 0)
-                placements += 1
+                -- Classic retains its original per-frame positioning.
+                -- In Spin mode, do NOT teleport every physics frame: that
+                -- prevents AngularVelocity from resolving contact naturally.
+                -- Correct position only briefly if contact drifts away.
+                if activeFlingMode == "classic"
+                    or elapsed - lastSpinPlacement >= 0.18
+                        and (own.Position - intended).Magnitude > 2.1 then
+                    own.CFrame = CFrame.new(intended)
+                        * CFrame.Angles(0, phase * 1.8, 0)
+                    placements += 1
+                    if activeFlingMode == "spin" then
+                        lastSpinPlacement = elapsed
+                        spinCorrections += 1
+                    end
+                end
                 local actualGap = (own.Position - t.Position).Magnitude
                 closest = math.min(closest, actualGap)
                 if actualGap > 5 then approachFails += 1 end
@@ -2530,7 +2544,16 @@ local function flingSelected(targetOverride, onFinished)
                     reason = "own character fell or died"
                     break
                 end
-                RunService.Heartbeat:Wait()
+                if activeFlingMode == "spin" then
+                    -- PreSimulation runs before the physics solver; allow
+                    -- rotational contact to be processed without a CFrame
+                    -- reset after each rendered frame.
+                    local ok, presim = pcall(function() return RunService.PreSimulation end)
+                    if ok and presim then presim:Wait()
+                    else RunService.Heartbeat:Wait() end
+                else
+                    RunService.Heartbeat:Wait()
+                end
             end
         end)
         -- Remove the experimental constraint whether the attempt succeeds,
@@ -2601,8 +2624,8 @@ local function flingSelected(targetOverride, onFinished)
                 or "no delayed launch observed"
             local contactText = canContact and "collision groups compatible" or "local collision test inconclusive"
             flingNotice = success and string.format(
-                "%s: %.2fs, %d placements, %d/%d overlap, %d gap>5, nearest %.1f, max drift %.0f; own %.0f/s spin %.0f; target %.0f studs peak %.0f/s; %s; %s; %s. LOCAL ONLY.",
-                activeFlingMode:upper(), elapsed, placements, overlaps, contactFrames, approachFails,
+                "%s: %.2fs, %d placements (%d spin corrections), %d/%d overlap, %d gap>5, nearest %.1f, drift %.0f; own %.0f/s spin %.0f; target %.0f studs peak %.0f/s; %s; %s; %s. LOCAL ONLY.",
+                activeFlingMode:upper(), elapsed, placements, spinCorrections, overlaps, contactFrames, approachFails,
                 closest == math.huge and -1 or closest, maxDrift, peakOwn, peakSpin,
                 motion, math.max(peakTarget, followSpeed), launchText, contactText, reason)
                 or "Fling error: " .. tostring(failure):sub(1, 90)
@@ -4579,7 +4602,7 @@ makeButton(funPage, "Diagnose selected player's collisions", function()
 end)
 label(funPage, "RESTORED v6.9 FLING • ~1.12 second per-frame 1.5 stud approach with 2,500 studs/s pulses. Fling Selected and Fling All use the exact same routine. 10 second delayed-launch monitor; LOCAL ONLY.",
     95, Color3.fromRGB(255, 207, 172), 12)
-label(funPage, "Spin is experimental. Longer contact can increase local overlap but cannot force server-owned players outside the map. Classic mode is unchanged.", 72,
+label(funPage, "Spin now allows ~0.18s of physics contact between position corrections instead of teleporting every frame. Classic still uses its old method. Other players may remain server-owned and unaffected.", 72,
     Color3.fromRGB(194, 220, 241), 12)
 makeSlider(funPage, "SPIN ROTATION SPEED", "SpinFlingSpeed", 700, 3500, 100, " rad/s")
 makeSlider(funPage, "SPIN CONTACT DURATION", "SpinFlingDuration", 0.8, 3.0, 0.1, " s")
