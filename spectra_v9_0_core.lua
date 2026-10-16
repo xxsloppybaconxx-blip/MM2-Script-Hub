@@ -5049,6 +5049,11 @@ v54.refreshAnimationRigButtons = function()
         local pack = v54.animationPacks[name]
         if button and button.Parent then button.Visible = pack and pack.Rig == rig end
     end
+    for _, entry in ipairs(v54.catalogPreviewButtons or {}) do
+        if entry.button and entry.button.Parent then
+            entry.button.Visible = entry.rig == rig
+        end
+    end
 end
 for _, packName in ipairs({
     "R6 Free", "R15 Classic", "R6 Style on R15", "Rthro",
@@ -5145,21 +5150,57 @@ v54.previewButton = makeButton(pages["ANIMS"], "PREVIEW animation ID", function(
         or ("Preview error: " .. tostring(err):sub(1, 72))
     inform(v54.animationStatus)
 end)
+-- Catalog previews use the supplied IDs, but do NOT claim asset ownership.
+-- They are only visible on the rig these clips were authored for.
+v54.catalogPreviewButtons = {}
+v54.catalogPreviewEntries = {
+    {"R6", "R6 WAVE", 128777973},
+    {"R6", "R6 POINT", 128853357},
+    {"R6", "R6 DANCE 1", 182435998},
+    {"R6", "R6 DANCE 2", 182436842},
+    {"R6", "R6 DANCE 3", 182436935},
+    {"R6", "R6 LAUGH", 129423131},
+    {"R6", "R6 CHEER", 129423030},
+    {"R15", "CLASSIC WAVE", 507770239},
+    {"R15", "CLASSIC POINT", 507770453},
+    {"R15", "CLASSIC DANCE 1", 507771019},
+    {"R15", "CLASSIC DANCE 2", 507776043},
+    {"R15", "CLASSIC DANCE 3", 507777268},
+    {"R15", "CATALOG HELLO", 3576686446},
+    {"R15", "CATALOG SHRUG", 3576968026},
+    {"R15", "CATALOG POINT 2", 3576823880},
+    {"R15", "CATALOG STADIUM", 3360686498},
+    {"R15", "CATALOG SALUTE", 3360689775},
+    {"R15", "CATALOG TILT", 3360692915},
+    {"R15", "CATALOG APPLAUD", 5915779043},
+    {"R15", "R6 STYLE NINJA DASH", 13978512316},
+    {"R15", "R6 STYLE NINJA SLASH", 13978507503},
+    {"R15", "R6 STYLE DUAL SLASH", 13978510688},
+    {"R15", "R6 STYLE SWORD PUMP", 13978511071},
+    {"R15", "R6 STYLE SWORD JUMP", 13978511543},
+    {"R15", "R6 STYLE SWORD THRUST", 13978511983},
+    {"R15", "R6 STYLE TWO HAND SWORD", 13978504790}
+}
+heading(pages["ANIMS"], "RIG-COMPATIBLE PREVIEW IDS")
+label(pages["ANIMS"], "Only previews for your current rig appear. Select a clip, then tap PREVIEW animation ID; Roblox may reject clips without permission.", 90,
+    Color3.fromRGB(185,207,237), 12)
+for _, item in ipairs(v54.catalogPreviewEntries) do
+    local rig, title, id = item[1], item[2], item[3]
+    local control = makeButton(pages["ANIMS"], "SELECT " .. title, function()
+        if v54.animationRigName() ~= rig then
+            return inform("Preview only supports the " .. rig .. " avatar rig")
+        end
+        v54.assetBox.Text = tostring(id)
+        inform(title .. " selected • tap PREVIEW animation ID")
+    end)
+    table.insert(v54.catalogPreviewButtons, {rig=rig, button=control})
+end
+v54.refreshAnimationRigButtons()
 heading(pages["ANIMS"], "QUICK PREVIEW IDS (R15)")
 label(pages["ANIMS"], "These select standard Roblox R15 animation asset IDs. Tap PREVIEW above to play; assets may still be blocked by the experience.",
     78, Color3.fromRGB(184, 205, 240), 12)
-for _, item in ipairs({
-    {"Wave", "507770239"}, {"Cheer", "507770677"},
-    {"Laugh", "507770818"}, {"Point", "507770453"},
-    {"Dance 1", "507771019"}, {"Dance 2", "507776043"},
-    {"Dance 3", "507777268"},
-}) do
-    local title, id = item[1], item[2]
-    makeButton(pages["ANIMS"], "Select animation: " .. title, function()
-        v54.assetBox.Text = id
-        inform(title .. " selected; tap PREVIEW animation ID")
-    end)
-end
+-- The formerly unfiltered R15 quick previews are provided in the
+-- rig-compatible list above. R6 users do not see incompatible choices.
 makeButton(pages["ANIMS"], "Cycle preview speed: 1x / 1.5x / 0.75x", function()
     if v54.animationSpeed == 1 then v54.animationSpeed = 1.5
     elseif v54.animationSpeed == 1.5 then v54.animationSpeed = 0.75
