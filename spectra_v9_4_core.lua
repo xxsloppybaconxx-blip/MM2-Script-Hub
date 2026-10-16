@@ -5210,7 +5210,12 @@ v54.applyAnimationPack = function(name, quiet)
     pcall(function()
         for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
             local id = track.Animation and track.Animation.AnimationId
-            if id and oldLocomotion[id] then track:Stop(0.1) end
+            if (id and oldLocomotion[id])
+                or track.Priority == Enum.AnimationPriority.Core
+                or track.Priority == Enum.AnimationPriority.Idle
+                or track.Priority == Enum.AnimationPriority.Movement then
+                track:Stop(0.1)
+            end
         end
     end)
     v54.restartAnimate(character)
@@ -5315,7 +5320,7 @@ v54.refreshAnimationRigButtons = function()
     local rig = v54.animationRigName()
     if v54.animationRigLabel and v54.animationRigLabel.Parent then
         v54.animationRigLabel.Text = "Detected body: " .. rig
-            .. ". Only matching packs are shown. Clips must load successfully."
+            .. ". Only matching packs are shown. Use CHECK PLAYING to verify."
     end
     for name, button in pairs(v54.animationPackButtons) do
         local pack = v54.animationPacks[name]
