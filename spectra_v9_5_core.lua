@@ -4905,7 +4905,7 @@ label(funPage, "LAUNCH tries pushing a selected player by moving your own charac
 makeSlider(funPage, "LAUNCH MOVEMENT SPEED", "LaunchSpeed", 150, 800, 25, " studs/s")
 makeSlider(funPage, "LAUNCH CONTACT TIME", "LaunchDuration", 0.8, 2.5, 0.1, " s")
 heading(funPage, "IY-INSPIRED TOUCH FLING")
-label(funPage, "Experimental touch-spin adapted from Infinite Yield's documented fling mechanism. Uses temporary local root angular force with short rotation pulses. Must be within 15 studs. May not move server-owned targets.", 95,
+label(funPage, "Experimental touch-spin adapted from Infinite Yield's documented fling mechanism. Uses temporary local root angular force with short rotation pulses. Can attempt a selected target at any starting distance by repositioning your own avatar. Long moves may trigger Invalid Location or server correction.", 95,
     Color3.fromRGB(193,222,245), 12)
 makeSlider(funPage, "TOUCH SPIN SPEED", "TouchSpinSpeed", 1500, 30000, 500, " rad/s")
 makeSlider(funPage, "TOUCH TEST DURATION", "TouchDuration", 0.6, 2.3, 0.1, " s")
