@@ -432,9 +432,34 @@ boxGui.IgnoreGuiInset = true
 -- ScreenInsets can throw on some Roblox clients: never let an optional
 -- ESP alignment setting block the entire window from loading.
 pcall(function() boxGui.ScreenInsets = Enum.ScreenInsets.None end)
-boxGui.DisplayOrder = 4
+boxGui.DisplayOrder = 15
 boxGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 boxGui.Parent = playerGui
+v54.sheriffCrosshair = Instance.new("Frame")
+v54.sheriffCrosshair.Name = "SpectraCrosshair"
+v54.sheriffCrosshair.AnchorPoint = Vector2.new(0.5,0.5)
+v54.sheriffCrosshair.Position = UDim2.fromScale(0.5,0.5)
+v54.sheriffCrosshair.Size = UDim2.fromOffset(120,120)
+v54.sheriffCrosshair.BackgroundTransparency = 1
+v54.sheriffCrosshair.Visible = false
+v54.sheriffCrosshair.Active = false
+v54.sheriffCrosshair.Parent = boxGui
+v54.crosshairParts = {}
+for _, direction in ipairs({"top","bottom","left","right","dot"}) do
+    local part = Instance.new("Frame")
+    part.Name = direction
+    part.AnchorPoint = Vector2.new(0.5,0.5)
+    part.BorderSizePixel = 0
+    part.BackgroundColor3 = Color3.fromRGB(104,255,245)
+    part.Active = false
+    part.ZIndex = 80
+    part.Parent = v54.sheriffCrosshair
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(5,8,18)
+    stroke.Thickness = 1.5
+    stroke.Parent = part
+    v54.crosshairParts[direction] = part
+end
 
 -- World-space effects must be parented in Workspace, not inside ScreenGui.
 local effectsFolder = Instance.new("Folder")
