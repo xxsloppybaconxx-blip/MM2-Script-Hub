@@ -3041,6 +3041,34 @@ v54.canUseSheriffControls = function()
     end
     return false, "No Gun tool or confirmed Sheriff (feed: " .. tostring(role) .. ")"
 end
+v54.updateSheriffCrosshair = function()
+    if destroyed or not v54.sheriffCrosshair then return end
+    local tool, equipped = findGun()
+    local role, source = getRole(localPlayer)
+    local allowed = source == "game" and role == "Sheriff"
+        or source ~= "game" and tool ~= nil
+            and role ~= "Murderer" and role ~= "Innocent" and role ~= "Hero"
+    v54.sheriffCrosshair.Visible = enabled.ShowSheriffCrosshair
+        and equipped and allowed and alive(localPlayer) or false
+    if not v54.sheriffCrosshair.Visible then return end
+    local length = math.clamp(numbers.CrosshairSize,8,36)
+    local gap = math.max(5,math.floor(length*0.44))
+    local offset = gap + length/2
+    local opacity = math.clamp(numbers.CrosshairOpacity,0.35,1)
+    for direction, part in pairs(v54.crosshairParts) do
+        part.BackgroundTransparency = 1-opacity
+        if direction == "dot" then
+            part.Size = UDim2.fromOffset(4,4)
+            part.Position = UDim2.fromOffset(60,60)
+        elseif direction == "top" or direction == "bottom" then
+            part.Size = UDim2.fromOffset(3,length)
+            part.Position = UDim2.fromOffset(60,60+(direction=="top" and -offset or offset))
+        else
+            part.Size = UDim2.fromOffset(length,3)
+            part.Position = UDim2.fromOffset(60+(direction=="left" and -offset or offset),60)
+        end
+    end
+end
 v54.equipSheriffGun = function()
     if not v54.canUseSheriffControls() then return false end
     local gun, equipped = findGun()
@@ -6146,6 +6174,7 @@ RunService:BindToRenderStep(v54.espStepName, Enum.RenderPriority.Camera.Value + 
     if os.clock() - v54.lastBoxFrame >= 0.09 then
         v54.lastBoxFrame = os.clock()
         v54.update2DBoxes()
+        v54.updateSheriffCrosshair()
     end
     v54.updateAimRing()
     v54.updateCombatRadius()
