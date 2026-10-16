@@ -122,6 +122,7 @@ local enabled = {
     SheriffRapidFire = false,
     ShowSheriffCrosshair = true,
     AimTorso = true,
+    PreferBeamRemote = true, -- CreateBeam/AH2 first, with ShootGun/AH fallback
     SheriffDpadFrontLock = true, -- Down runs front-lock test; toggle OFF for ordinary auto aim
     SheriffFrontMoveSelf = true, -- Place your character near the Murderer; don't fabricate target positions on your client
     SheriffRequireVisibleKnife = true, -- Normal sheriff auto aim/shoot only; NEVER gate front-stack
@@ -3380,13 +3381,20 @@ end
 
 local function gunShootRemote(gun)
     local knifeServer = gun:FindFirstChild("KnifeServer")
-    local primary = knifeServer and knifeServer:FindFirstChild("ShootGun")
-    if primary and primary:IsA("RemoteFunction") then return primary, "AH" end
+    local shoot = knifeServer and knifeServer:FindFirstChild("ShootGun")
     local knifeLocal = gun:FindFirstChild("KnifeLocal")
     local createBeam = knifeLocal and knifeLocal:FindFirstChild("CreateBeam")
-    local fallback = createBeam and createBeam:FindFirstChild("RemoteFunction")
-    if fallback and fallback:IsA("RemoteFunction") then return fallback, "AH2" end
-    return nil, nil
+    local beam = createBeam and createBeam:FindFirstChild("RemoteFunction")
+    local hasBeam = beam and beam:IsA("RemoteFunction")
+    local hasShoot = shoot and shoot:IsA("RemoteFunction")
+    if enabled.PreferBeamRemote then
+        if hasBeam then return beam, "AH2", "CreateBeam/AH2" end
+        if hasShoot then return shoot, "AH", "ShootGun/AH" end
+    else
+        if hasShoot then return shoot, "AH", "ShootGun/AH" end
+        if hasBeam then return beam, "AH2", "CreateBeam/AH2" end
+    end
+    return nil,nil,"No supported shooting interface"
 end
 
 -- Check the actual third-person firing origin. The gun Handle and character
@@ -3525,7 +3533,7 @@ local function attemptMurdererShot(manual, headPriority)
         if manual then inform(shotNotice) end
         return
     end
-    local remote, shotTag = gunShootRemote(gun)
+    local remote, shotTag, remotePath = gunShootRemote(gun)
     if not remote then
         shotNotice = "No supported Gun ShootGun/CreateBeam remote found"
         if manual then inform(shotNotice) end
@@ -3546,14 +3554,14 @@ local function attemptMurdererShot(manual, headPriority)
     if enabled.AutoSilentShot then
         v54.silentAimReport = "Auto head shot #" .. request .. " pending • hit not confirmed"
     end
-    shotNotice = (headPriority and "Headshot" or "Gun") .. " request #" .. request
-        .. " pending; hit not confirmed"
+    shotNotice = (headPriority and "Head" or (enabled.AimTorso and "Torso" or "Head")) ..
+        " request #" .. request .. " via " .. remotePath .. " pending; hit NOT confirmed"
     task.spawn(function()
         local ok, err = pcall(function() remote:InvokeServer(1, position, shotTag) end)
         if destroyed or shotAttemptCount ~= request then return end
         shotInFlight = false
-        shotNotice = ok and ("Sent gun request #" .. request .. "; hit unconfirmed")
-            or ("Gun remote error: " .. tostring(err):sub(1, 65))
+        shotNotice = ok and ("Gun request #" .. request .. " via " .. remotePath .. " returned; hit UNVERIFIED")
+            or ("Gun remote " .. remotePath .. " error: " .. tostring(err):sub(1, 65))
         if enabled.AutoSilentShot then
             v54.silentAimReport = ok
                 and ("Auto Silent Shot #" .. request .. " requested; server hit UNVERIFIED")
@@ -4962,6 +4970,7 @@ toggle(v54.sheriffPage, "AUTO SHOOT • head target (1P/3P)", "AutoShootMurderer
 end)
 toggle(v54.sheriffPage, "REQUIRE VISIBLE KNIFE (normal auto aim/shoot only)", "SheriffRequireVisibleKnife")
 toggle(v54.sheriffPage, "AIM TORSO HITBOX (OFF = Head)", "AimTorso")
+toggle(v54.sheriffPage, "PREFER CreateBeam/AH2 (OFF = ShootGun/AH)", "PreferBeamRemote")
 makeSlider(v54.sheriffPage, "MOVEMENT PREDICTION", "ShotLead", 0, 0.18, 0.01, " s")
 toggle(v54.sheriffPage, "SHOW AIM/SHOT RADIUS RING", "CombatRadius")
 toggle(v54.sheriffPage, "CROSSHAIR ON SHERIFF/HERO GUN", "ShowSheriffCrosshair")
