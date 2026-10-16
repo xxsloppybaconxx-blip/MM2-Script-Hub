@@ -5488,7 +5488,7 @@ v54.settingsSnapshot = function()
     for key, default in pairs(v54.defaultNumbers) do
         if type(default) == "number" then sliders[key] = numbers[key] end
     end
-    return {version = 3, toggles = toggles, numbers = sliders,
+    return {version = 4, toggles = toggles, numbers = sliders,
         postFarmMode = v54.postFarmMode,
         resetAt40Enabled = v54.resetAt40Enabled,
         animationPack = v54.selectedAnimationPack,
@@ -5532,6 +5532,12 @@ v54.loadSettings = function(quiet)
     for key, value in pairs(snapshot.toggles) do
         if type(v54.defaultEnabled[key]) == "boolean" and not v54.safeActive[key]
             and type(value) == "boolean" then enabled[key] = value end
+    end
+    -- Older saved settings inherited auto-hide OFF from v9.0 defaults.
+    -- Migrate ON once for the new XP-overlay fix. v9.1 user opt-outs
+    -- stay OFF after they save the new version-4 preferences.
+    if not snapshot.version or snapshot.version < 4 then
+        enabled.AutoHideRoundResults = true
     end
     for key, value in pairs(snapshot.numbers) do
         if type(v54.defaultNumbers[key]) == "number" and type(value) == "number"
