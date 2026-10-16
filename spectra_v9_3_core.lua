@@ -129,7 +129,7 @@ local enabled = {
     ControllerHoldAim = true,
     LocalGhost = false,
 }
-local numbers = { Speed = 24, Jump = 65, FlySpeed = 45, FOV = 70, ESPRange = 250, FarmRadius = 1000, FarmFlySpeed = 25, FarmTeleportDelay = 2.5, AimRadius = 210, AimSmooth = 0.54, FarmVisitCap = 40, KnifeAuraRadius = 12, SheriffFrontDistance = 14, SpinFlingSpeed = 2400, SpinFlingDuration = 2.25, SheriffRapidInterval = 1.1, CrosshairSize = 16, CrosshairOpacity = 0.96, Gravity = Workspace.Gravity }
+local numbers = { Speed = 24, Jump = 65, FlySpeed = 45, FOV = 70, ESPRange = 250, FarmRadius = 1000, FarmFlySpeed = 25, FarmTeleportDelay = 2.5, AimRadius = 210, AimSmooth = 0.54, FarmVisitCap = 40, KnifeAuraRadius = 12, SheriffFrontDistance = 14, SpinFlingSpeed = 2400, SpinFlingDuration = 2.25, LaunchSpeed = 480, LaunchDuration = 1.65, SheriffRapidInterval = 1.1, CrosshairSize = 16, CrosshairOpacity = 0.96, Gravity = Workspace.Gravity }
 -- Save a copy of defaults before users customize settings.
 local playerEffects = {}
 local objectEffects = {}
@@ -243,7 +243,7 @@ local lastShotAttempt = -100
 local shotInFlight = false
 local flingNotice = "Fling not tested in this session"
 -- The original v6.9-style method remains default. Only one fling engine runs.
-v54.flingMode = "classic" -- classic or spin
+v54.flingMode = "classic" -- classic, spin, or launch
 v54.flingModeToggle = nil
 local lastRoleUI = 0
 local lightOriginal = {
@@ -2519,7 +2519,9 @@ local function flingSelected(targetOverride, onFinished)
     enabled.FlingActive = true
     local activeFlingMode = v54.flingMode
     local contactDuration = activeFlingMode == "spin"
-        and math.clamp(numbers.SpinFlingDuration, 0.8, 3.0) or 1.12
+        and math.clamp(numbers.SpinFlingDuration, 0.8, 3.0)
+        or activeFlingMode == "launch" and math.clamp(numbers.LaunchDuration, 0.8, 2.5)
+        or 1.12
     flingNotice = string.format("%s • approaching %s (%.1f studs) • local contact (server motion unverified)",
         activeFlingMode, target.DisplayName, initialGap)
     if v54.flingFunLine and v54.flingFunLine.Parent then v54.flingFunLine.Text = flingNotice end
@@ -2556,6 +2558,15 @@ local function flingSelected(targetOverride, onFinished)
             local lastSpinPlacement = -100
             local spinCorrections = 0
             local lastCollisionProbe = -100
+            local launchCorrections, lastLaunchPlacement = 0, -100
+            local lowestTargetY = startingTarget.Y
+            local launchAxis = Vector3.new(startingTarget.X-origin.Position.X,0,
+                startingTarget.Z-origin.Position.Z)
+            if launchAxis.Magnitude < 0.5 then
+                launchAxis = Vector3.new(own.CFrame.LookVector.X,0,own.CFrame.LookVector.Z)
+            end
+            if launchAxis.Magnitude < 0.5 then launchAxis = Vector3.new(0,0,-1) end
+            launchAxis = launchAxis.Unit
             -- Position and apply impulses EVERY frame, not every 0.17 seconds.
             -- When the client accepts these local CFrame changes, the gap
             -- should read ~1.5 studs, as it did in the reference monitor.
@@ -2575,26 +2586,35 @@ local function flingSelected(targetOverride, onFinished)
                 else
                     consecutiveOutOfRange = 0
                 end
-                if consecutiveOutOfRange >= (activeFlingMode == "spin" and 14 or 10) then
+                if consecutiveOutOfRange >= (activeFlingMode ~= "classic" and 14 or 10) then
                     reason = "server or movement system repeatedly moved us away (>10 studs)"
                     break
                 end
                 local height = math.floor(elapsed / 0.20) % 2 == 0 and 1.45 or -1.45
                 local offset = Vector3.new(0.28 * math.sin(phase), height, 0.28 * math.cos(phase))
-                local intended = t.Position + offset
+                local intended = activeFlingMode == "launch"
+                    and t.Position - launchAxis * 1.5 + Vector3.new(0,-0.45,0)
+                    or (t.Position + offset)
                 -- Classic retains its original per-frame positioning.
                 -- In Spin mode, do NOT teleport every physics frame: that
                 -- prevents AngularVelocity from resolving contact naturally.
                 -- Correct position only briefly if contact drifts away.
                 if activeFlingMode == "classic"
-                    or elapsed - lastSpinPlacement >= 0.18
-                        and (own.Position - intended).Magnitude > 2.1 then
-                    own.CFrame = CFrame.new(intended)
-                        * CFrame.Angles(0, phase * 1.8, 0)
+                    or activeFlingMode == "spin" and elapsed - lastSpinPlacement >= 0.18
+                        and (own.Position - intended).Magnitude > 2.1
+                    or activeFlingMode == "launch" and launchCorrections < 4
+                        and elapsed - lastLaunchPlacement >= 0.24
+                        and (own.Position - intended).Magnitude > 2.2 then
+                    own.CFrame = activeFlingMode == "launch"
+                        and CFrame.lookAt(intended, intended + launchAxis)
+                        or CFrame.new(intended) * CFrame.Angles(0, phase * 1.8, 0)
                     placements += 1
                     if activeFlingMode == "spin" then
                         lastSpinPlacement = elapsed
                         spinCorrections += 1
+                    elseif activeFlingMode == "launch" then
+                        lastLaunchPlacement = elapsed
+                        launchCorrections += 1
                     end
                 end
                 local actualGap = (own.Position - t.Position).Magnitude
@@ -2603,20 +2623,29 @@ local function flingSelected(targetOverride, onFinished)
 
                 -- One bounded impulse per physics frame; the next frame
                 -- reestablishes contact instead of allowing prolonged drift.
-                local direction = Vector3.new(math.sin(phase * 1.13),
-                    0.55 * math.cos(phase * 0.73), math.cos(phase * 1.37))
+                local direction = activeFlingMode == "launch"
+                    and (launchAxis + Vector3.new(0, 0.30, 0))
+                    or Vector3.new(math.sin(phase * 1.13),
+                        0.55 * math.cos(phase * 0.73), math.cos(phase * 1.37))
                 if direction.Magnitude > 0 then
-                    own.AssemblyLinearVelocity = direction.Unit
-                        * (activeFlingMode == "spin"
-                            and math.clamp(numbers.SpinFlingSpeed * 0.6, 850, 2200)
+                    own.AssemblyLinearVelocity = direction.Unit *
+                        (activeFlingMode == "launch"
+                            and math.clamp(numbers.LaunchSpeed, 150, 800)
+                            or activeFlingMode == "spin"
+                                and math.clamp(numbers.SpinFlingSpeed * 0.6, 850, 2200)
                             or 2500)
                     pulses += 1
                 end
-                if activeFlingMode ~= "spin" then
+                if activeFlingMode == "classic" then
                     own.AssemblyAngularVelocity = Vector3.new(
                         900 * math.sin(phase), 2200 * math.cos(phase * 0.75),
                         900 * math.cos(phase))
+                elseif activeFlingMode == "launch" then
+                    -- A forward-moving physical contact attempt, rather than
+                    -- setting the selected player's character position.
+                    own.AssemblyAngularVelocity = Vector3.zero
                 end
+                lowestTargetY = math.min(lowestTargetY, t.Position.Y)
                 -- Spatial queries are expensive on mobile. Sample overlap
                 -- at 10Hz instead of on every physics/render frame.
                 if elapsed - lastCollisionProbe >= 0.1 then
@@ -2644,7 +2673,7 @@ local function flingSelected(targetOverride, onFinished)
                     reason = "own character fell or died"
                     break
                 end
-                if activeFlingMode == "spin" then
+                if activeFlingMode == "spin" or activeFlingMode == "launch" then
                     -- PreSimulation runs before the physics solver; allow
                     -- rotational contact to be processed without a CFrame
                     -- reset after each rendered frame.
@@ -2724,10 +2753,11 @@ local function flingSelected(targetOverride, onFinished)
                 or "no delayed launch observed"
             local contactText = canContact and "collision groups compatible" or "local collision test inconclusive"
             flingNotice = success and string.format(
-                "%s: %.2fs, %d placements (%d spin corrections), %d/%d overlap, %d gap>5, nearest %.1f, drift %.0f; own %.0f/s spin %.0f; target %.0f studs peak %.0f/s; %s; %s; %s. LOCAL ONLY.",
+                "%s: %.2fs, %d placements (%d spin corrections), %d/%d overlap, %d gap>5, nearest %.1f, drift %.0f; own %.0f/s spin %.0f; target %.0f studs peak %.0f/s; lowest target Y %.1f; %s; %s; %s. LOCAL OBSERVATION ONLY.",
                 activeFlingMode:upper(), elapsed, placements, spinCorrections, overlaps, contactFrames, approachFails,
                 closest == math.huge and -1 or closest, maxDrift, peakOwn, peakSpin,
-                motion, math.max(peakTarget, followSpeed), launchText, contactText, reason)
+                motion, math.max(peakTarget, followSpeed), lowestTargetY,
+                launchText, contactText, reason)
                 or "Fling error: " .. tostring(failure):sub(1, 90)
             if v54.flingFunLine and v54.flingFunLine.Parent then
                 v54.flingFunLine.Text = flingNotice
