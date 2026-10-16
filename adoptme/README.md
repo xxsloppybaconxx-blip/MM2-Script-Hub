@@ -1,40 +1,41 @@
-# Adopt Me Halloween 2026 Hub (experimental)
+# Adopt Me Halloween Helper v2 (experimental)
 
-A **separate**, self-contained Roblox client script for **Ghost Gallery** and **Hauntlet 2**. It lives in the \`adoptme/\` folder to keep it isolated from the existing MM2 hub.
+**Updated October 16, 2026.** This standalone Lua file lives in \`adoptme/\` within the existing MM2 repo. The root-level MM2 scripts/loaders/README remain untouched.
 
-## Files
+## Load in Delta (Adopt Me only)
 
-- [halloween_hub.lua](./halloween_hub.lua) — two-mode Lua helper with its own menu.
-- Existing MM2 scripts, loaders, and root README were **not changed**.
+\`\`\`lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/xxsloppybaconxx-blip/MM2-Script-Hub/main/adoptme/halloween_hub.lua"))()
+\`\`\`
 
-## Features
+This loader always fetches the latest published file. Close/unload older versions before testing; running v2 will also attempt to unload the previous hub.
 
-**Ghost Gallery**
-- ESP for client-visible ghosts and haunted objects, based on names, attributes, or tags.
-- Optional teleport toward the detected target.
-- Optional aim and normal Tool activation for an equipped Ghost Blaster or vacuum.
+## Changes since v1
 
-**Hauntlet 2**
-- Door ESP with client-visible risk labels.
-- Optional teleport toward selected doors.
-- Optional auto-choice and attempt to enter doors with exposed ProximityPrompts or ClickDetectors.
-- Optional **Require confirmed-safe signal**: refuses to choose unknown doors unless the client explicitly exposes a safe-door attribute/tag. This can result in no automatic actions.
+- **Fixed major lag cause:** removed repeated \`Workspace:GetDescendants()\` calls, which scanned the entire game every 0.85 seconds. v2 performs a spatial query for nearby parts every **4 seconds**, caps the results to 700 parts, and limits ESP to 12 highlighted targets.
+- **Improved ESP attachment:** highlights are parented to a local folder under Workspace instead of ScreenGui, improving compatibility.
+- **Actual auto WALK mode:** \`Humanoid:MoveTo\` is now used for Hauntlet doors. Optional nearby teleport is separate and might be rejected by the game.
+- **Broader detection:** door names, certain client tags/attributes, and open/enter ProximityPrompts can be detected. This is still **heuristic**, not a real Adopt Me game-object API.
+- **Manual door marking:** aim the **center of your screen** at a door and tap **Mark door at screen CENTER**. Repeat for each door. Auto Walk can select marked doors even when automatic discovery cannot.
+- **Copy nearby door debug:** while **inside a Hauntlet room**, tap **Copy nearby door debug**. If supported, this copies a diagnostics report to your clipboard. Otherwise it prints to the developer console. Share the report to help identify the game's actual door models without guessing.
 
-The interface starts with ESP enabled and automatic actions **off**. Tap the mode button to switch. F6 hides/shows the desktop UI; use **Unload / Close** to stop. Running the script again unloads the previous copy.
+## Features and limitations
 
-## Source / use
+### Hauntlet 2
+- Door ESP highlights detected doors and shows a risk indicator. **Yellow UNKNOWN is not safe.**
+- Automatic walking toward door candidates is a best-effort movement request, **not guaranteed entry**. Some entrances may require game-specific interactions.
+- Auto Walk attempts a nearby ProximityPrompt, if found, or simply walks toward a door.
+- \`Confirmed safe only\` requires an explicit client-exposed safe tag/attribute; often **no door will qualify**. Door ESP cannot reveal server-only ghost information, and this script cannot promise a ghost-free choice.
+- If nothing appears, point at a real door and use **Mark door**, then **Copy nearby door debug** and share the result for a game-specific fix.
 
-Raw Lua:
-\`https://raw.githubusercontent.com/xxsloppybaconxx-blip/MM2-Script-Hub/main/adoptme/halloween_hub.lua\`
+### Ghost Gallery
+- Searches nearby parts for ghost/haunted names or metadata.
+- Ghost ESP, Auto Walk, and Tool:Activate() for a Ghost Blaster are toggles. The game may hide possessed furniture from the client or use other interaction mechanics.
+- **Not live-tested**: these features may not function, even if the menu appears.
 
-Run **only this Lua file** in Adopt Me using an environment that supports Roblox client Lua, GUI creation, and the needed APIs. The script doesn't load other code, reference the MM2 loader, or require a web service.
+## Safety / testing
 
-## Limits: please read
+This script is an **experimental helper**, not a validated auto-farming tool. We cannot inspect Adopt Me's live internal hierarchy, verify targets, or bypass server actions from GitHub. No service calls, third-party libraries, login prompts, or MM2 integration are included. Client scripts can violate Roblox or experience rules and risk account moderation.
 
-**This is a prototype, not a game-tested guaranteed autofarm.** We cannot inspect or execute Adopt Me's live game hierarchy here. No private RemoteEvents or hidden answers are assumed. Client-side names, tags, prompts, and tool activation may not match the real game, and the server may reject teleport/action attempts. The script **does not auto-queue or guarantee round completion**.
-
-**Hauntlet:** Yellow \`UNKNOWN\` is **not** a safe-door indication. Orange/red mean estimated/visible danger; green \`SAFE SIGNAL\` only appears when an explicit attribute or tag is exposed. For 2026, Bolt's Phone arrow points toward a ghost; a matching exposed \`PhoneMarked\` or \`BoltPhoneTarget\` indicator is treated as danger. The live game may not expose either attribute. Doors may still be risky when they aren't marked.
-
-**Ghost Gallery:** Hidden ghosts within furniture and the boss phases may require information or mechanics that are not visible to a generic client-side scanner. Tool:Activate() alone may not actually catch them.
-
-Using third-party scripts in a live Roblox game may violate the experience's or Roblox's rules and can result in moderation. No guarantee of compatibility or account safety is provided.
+## File
+[halloween_hub.lua](./halloween_hub.lua)
