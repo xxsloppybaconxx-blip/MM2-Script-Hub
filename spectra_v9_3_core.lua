@@ -4798,24 +4798,37 @@ label(funPage, "Spin now allows ~0.18s of physics contact between position corre
     Color3.fromRGB(194, 220, 241), 12)
 makeSlider(funPage, "SPIN ROTATION SPEED", "SpinFlingSpeed", 700, 3500, 100, " rad/s")
 makeSlider(funPage, "SPIN CONTACT DURATION", "SpinFlingDuration", 0.8, 3.0, 0.1, " s")
-v54.flingModeToggle = makeButton(funPage, "MODE: CLASSIC  •  tap for SPIN", function()
+heading(funPage, "PHYSICAL CONTACT LAUNCH • NEW TEST")
+label(funPage, "LAUNCH tries pushing a selected player by moving your own character into contact and applying forward/upward velocity. It never directly writes the other player's CFrame. The server may ignore/correct the motion.", 105,
+    Color3.fromRGB(188,220,248), 12)
+makeSlider(funPage, "LAUNCH MOVEMENT SPEED", "LaunchSpeed", 150, 800, 25, " studs/s")
+makeSlider(funPage, "LAUNCH CONTACT TIME", "LaunchDuration", 0.8, 2.5, 0.1, " s")
+v54.refreshFlingModeText = function()
+    if not v54.flingModeToggle then return end
+    v54.flingModeToggle.Text = v54.flingMode == "classic"
+        and "MODE: CLASSIC • tap for SPIN"
+        or v54.flingMode == "spin" and "MODE: SPIN • tap for LAUNCH"
+        or "MODE: LAUNCH • tap for CLASSIC"
+end
+v54.flingModeToggle = makeButton(funPage, "MODE: CLASSIC • tap for SPIN", function()
     if flingBusy or v54.flingAllActive then
         return inform("Stop current fling before switching modes")
     end
-    v54.flingMode = v54.flingMode == "classic" and "spin" or "classic"
-    v54.flingModeToggle.Text = v54.flingMode == "classic"
-        and "MODE: CLASSIC  •  tap for SPIN"
-        or "MODE: SPIN CONSTRAINT  •  tap for CLASSIC"
-    inform("Fling mode: " .. v54.flingMode:upper())
+    v54.flingMode = v54.flingMode == "classic" and "spin"
+        or v54.flingMode == "spin" and "launch" or "classic"
+    v54.refreshFlingModeText()
+    inform("Contact mode: " .. v54.flingMode:upper()
+        .. " • local movement is not proof of server displacement")
 end)
+v54.refreshFlingModeText()
 makeButton(funPage, "FLING SELECTED • CHOSEN MODE", function()
     flingSelected()
 end)
 makeButton(funPage, "FLING ALL • CHOSEN MODE", function()
     v54.flingAll()
 end)
-label(funPage, "CLASSIC retains the existing contact pulses. SPIN applies a temporary AngularVelocity constraint while in contact; it automatically cleans up and switches back with one tap. Neither guarantees server-side movement.",
-    78, Color3.fromRGB(186, 225, 209), 12)
+label(funPage, "CLASSIC: original rapid contact. SPIN: temporary angular constraint. LAUNCH: straight contact push with very limited position correction, then 10 seconds of target-movement observation. All use local physics; no mode guarantees server movement.",
+    96, Color3.fromRGB(186,225,209), 12)
 
 heading(funPage, "READ-ONLY MOONDIETY MONITOR")
 label(funPage, "Select the same target, tap START, minimize SPECTRA and fling only with Moondiety. Recording runs up to 25 seconds. Do not run both fling engines simultaneously.",
