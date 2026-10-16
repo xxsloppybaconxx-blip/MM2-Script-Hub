@@ -4901,24 +4901,39 @@ label(funPage, "LAUNCH tries pushing a selected player by moving your own charac
     Color3.fromRGB(188,220,248), 12)
 makeSlider(funPage, "LAUNCH MOVEMENT SPEED", "LaunchSpeed", 150, 800, 25, " studs/s")
 makeSlider(funPage, "LAUNCH CONTACT TIME", "LaunchDuration", 0.8, 2.5, 0.1, " s")
+heading(funPage, "IY-INSPIRED TOUCH FLING")
+label(funPage, "Experimental touch-spin adapted from Infinite Yield's documented fling mechanism. Uses temporary local root angular force with short rotation pulses. Must be within 28 studs. May not move server-owned targets.", 95,
+    Color3.fromRGB(193,222,245), 12)
+makeSlider(funPage, "TOUCH SPIN SPEED", "TouchSpinSpeed", 1500, 30000, 500, " rad/s")
+makeSlider(funPage, "TOUCH TEST DURATION", "TouchDuration", 0.6, 2.3, 0.1, " s")
 v54.refreshFlingModeText = function()
     if not v54.flingModeToggle then return end
     v54.flingModeToggle.Text = v54.flingMode == "classic"
         and "MODE: CLASSIC • tap for SPIN"
         or v54.flingMode == "spin" and "MODE: SPIN • tap for LAUNCH"
-        or "MODE: LAUNCH • tap for CLASSIC"
+        or v54.flingMode == "launch" and "MODE: LAUNCH • tap for TOUCH"
+        or "MODE: IY TOUCH • tap for CLASSIC"
 end
 v54.flingModeToggle = makeButton(funPage, "MODE: CLASSIC • tap for SPIN", function()
     if flingBusy or v54.flingAllActive then
         return inform("Stop current fling before switching modes")
     end
     v54.flingMode = v54.flingMode == "classic" and "spin"
-        or v54.flingMode == "spin" and "launch" or "classic"
+        or v54.flingMode == "spin" and "launch"
+        or v54.flingMode == "launch" and "touch" or "classic"
     v54.refreshFlingModeText()
     inform("Contact mode: " .. v54.flingMode:upper()
         .. " • local movement is not proof of server displacement")
 end)
 v54.refreshFlingModeText()
+makeButton(funPage, "TOUCH FLING SELECTED • NEW TEST", function()
+    if flingBusy or v54.flingAllActive then
+        return inform("Stop the previous contact test before starting another")
+    end
+    v54.flingMode = "touch"
+    v54.refreshFlingModeText()
+    flingSelected()
+end)
 makeButton(funPage, "LAUNCH SELECTED • PHYSICS CONTACT TEST", function()
     if flingBusy or v54.flingAllActive then return inform("Finish the current contact test") end
     v54.flingMode = "launch"
@@ -4931,7 +4946,7 @@ end)
 makeButton(funPage, "FLING ALL • CHOSEN MODE", function()
     v54.flingAll()
 end)
-label(funPage, "CLASSIC: original rapid contact. SPIN: temporary angular constraint. LAUNCH: straight contact push with very limited position correction, then 10 seconds of target-movement observation. All use local physics; no mode guarantees server movement.",
+label(funPage, "CLASSIC: earlier velocity method. SPIN: AngularVelocity constraint. LAUNCH: forward momentum. IY TOUCH: alternating BodyAngularVelocity pulses with original mass settings restored afterward. Reports observed motion for 10 seconds; no guaranteed server fling.",
     96, Color3.fromRGB(186,225,209), 12)
 
 heading(funPage, "READ-ONLY MOONDIETY MONITOR")
