@@ -81,7 +81,7 @@ local enabled = {
     CustomJump = false,
     InfiniteJump = false,
     Noclip = false,
-    AutoHideRoundResults = false, -- opt-in; default keeps legitimate win screens
+    AutoHideRoundResults = true, -- only hide recognized reward/win panels; user can turn OFF
     Fly = false,
     AntiFling = false,
     Fullbright = false,
@@ -171,7 +171,7 @@ local v54 = {
     roundResultLastScan = -100,
     roundResultHiddenTotal = 0,
     roundResultStatusLabel = nil,
-    roundResultNotice = "Ready • auto-hide OFF",
+    roundResultNotice = "Ready • auto-hide ON (reward/win panels)",
 }
 -- Controller buttons operate alongside touch/keyboard without consuming Roblox inputs.
 -- L2/LT is Sheriff hold-to-aim. L1/LB and R1/RB remain native weapon controls.
@@ -1546,6 +1546,41 @@ v54.isRoundResultText = function(value)
         or t:find("murderervictory", 1, true) ~= nil
         or t:find("innocentvictory", 1, true) ~= nil
 end
+-- MM2 also shows a long dark XP/reward progress overlay like "+3,000".
+-- It need not contain the words "win" or "victory", so the old cleaner missed it.
+-- Only consider reasonably large, mid-screen, wide panels containing a clear
+-- positive reward label; never hide an entire HUD or root ScreenGui by heuristic.
+v54.isRoundRewardText = function(value)
+    if type(value) ~= "string" then return false end
+    local stripped = value:gsub("<[^>]+>", ""):gsub("%s+", "")
+    local amount = stripped:match("^%+([%d,]+)$")
+    if not amount then return false end
+    local numerical = tonumber(amount:gsub(",", ""))
+    return numerical ~= nil and numerical >= 50
+end
+v54.rewardPanelFor = function(item)
+    local cam = Workspace.CurrentCamera
+    local screen = cam and cam.ViewportSize or Vector2.new(1280,720)
+    local best = nil
+    local node = item.Parent
+    local depth = 0
+    while node and node ~= playerGui and depth < 8 do
+        if node:IsA("ScreenGui") then break end
+        if node:IsA("GuiObject") and node.Visible then
+            local sz = node.AbsoluteSize
+            local pos = node.AbsolutePosition
+            local centerY = pos.Y + sz.Y/2
+            -- Restrict to a reward/progress bar across the center area.
+            local eligible = sz.X >= screen.X * 0.34 and sz.X <= screen.X * 0.96
+                and sz.Y >= 30 and sz.Y <= math.min(screen.Y*0.34, 260)
+                and centerY >= screen.Y * 0.20 and centerY <= screen.Y * 0.81
+            if eligible then best = node end
+        end
+        node = node.Parent
+        depth += 1
+    end
+    return best
+end
 -- Hide the surrounding result panel when a result label is nested in
 -- a generic-named frame. Never hide the broad game HUD by name alone.
 v54.resultContainerFor = function(item, manual)
@@ -1586,10 +1621,13 @@ v54.clearRoundResults = function(manual)
         if item ~= gui and item ~= boxGui
             and not item:IsDescendantOf(gui) and not item:IsDescendantOf(boxGui) then
             local recognized = v54.isRoundResultName(item.Name)
-            local textMatch = (item:IsA("TextLabel") or item:IsA("TextButton"))
-                and v54.isRoundResultText(item.Text)
-            if recognized or textMatch then
-                local selected = recognized and item or v54.resultContainerFor(item, manual)
+            local isText = item:IsA("TextLabel") or item:IsA("TextButton")
+            local textMatch = isText and v54.isRoundResultText(item.Text)
+            local rewardPanel = isText and v54.isRoundRewardText(item.Text)
+                and v54.rewardPanelFor(item) or nil
+            if recognized or textMatch or rewardPanel then
+                local selected = rewardPanel or
+                    (recognized and item or v54.resultContainerFor(item, manual))
                 if selected:IsA("ScreenGui") then
                     if selected.Enabled and not claimed[selected] then
                         selected.Enabled = false
@@ -5342,7 +5380,7 @@ toggle(settingsPage, "Reduce sliding on ice (local)", "AntiSlip")
 toggle(settingsPage, "Disable post-processing FX", "LowFX", v54.setLowFX)
 toggle(settingsPage, "Anti-void (experimental)", "AntiVoid")
 heading(settingsPage, "ROUND RESULTS")
-label(settingsPage, "Auto-hide is OFF by default. It only searches for recognizable round-end panels in PlayerGui, not the full game HUD.",
+label(settingsPage, "Auto-hide is ON by default and also recognizes the large +XP progress-bar overlay shown after a round. It avoids Roblox CoreGui and the regular game HUD. Turn OFF if a legitimate reward panel should remain.",
     67, Color3.fromRGB(192, 217, 242), 12)
 toggle(settingsPage, "AUTO-HIDE round results", "AutoHideRoundResults", function(on)
     if on then v54.clearRoundResults(false)
@@ -5844,7 +5882,7 @@ watch(RunService.Heartbeat:Connect(function(delta)
     local ownRoot = rootOf(localPlayer)
     if enabled.Noclip then v54.applyNoclip() end
     if (enabled.AutoHideRoundResults or now < v54.roundResultManualUntil)
-        and now - v54.roundResultLastScan >= 0.22 then
+        and now - v54.roundResultLastScan >= 0.85 then
         v54.roundResultLastScan = now
         local ok, err = pcall(v54.clearRoundResults, false)
         if not ok then
