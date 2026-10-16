@@ -3428,8 +3428,30 @@ local function shootLineOfSight(target, destination, gun)
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = {char}
     local result = Workspace:Raycast(origin, direction, params)
-    if not result or result.Instance:IsDescendantOf(targetChar) then return true end
-    return false, "Gun muzzle is obstructed"
+    if not result then return true, "No local obstacle (no target ray hit)" end
+    if result.Instance:IsDescendantOf(targetChar) then
+        return true, "Local muzzle ray intersects " .. result.Instance.Name
+    end
+    return false, "Muzzle blocked by " .. result.Instance.Name
+end
+-- Non-firing read-only diagnostic to tell an aim miss from a local muzzle obstruction.
+v54.testGunRay = function()
+    local murderer = findConfirmedMurderer(true)
+    local gun, equipped = findGun()
+    if not gun then return inform("Shot check: Gun not found in backpack/character") end
+    if not equipped then return inform("Shot check: equip the Gun first") end
+    if not murderer then return inform("Shot check: no readable Murderer target") end
+    local part = v54.getShotPart(murderer)
+    if not part then return inform("Shot check: Murderer physical hitbox missing") end
+    local clear, report = shootLineOfSight(murderer,part.Position,gun)
+    local camera = Workspace.CurrentCamera
+    local visible = camera and hasWallClearance(camera,part)
+    local _,_,path = gunShootRemote(gun)
+    local msg = string.format("GUN CHECK • %s • %s • %s • camera:%s • target:%d studs • server hit UNVERIFIED",
+        part.Name, tostring(report), tostring(path),
+        visible and "clear" or "blocked", math.floor(distanceTo(part) or -1))
+    shotNotice = msg
+    inform(msg)
 end
 
 -- The server may enforce its own reload timer independently of these
@@ -3557,11 +3579,13 @@ local function attemptMurdererShot(manual, headPriority)
     shotNotice = (headPriority and "Head" or (enabled.AimTorso and "Torso" or "Head")) ..
         " request #" .. request .. " via " .. remotePath .. " pending; hit NOT confirmed"
     task.spawn(function()
-        local ok, err = pcall(function() remote:InvokeServer(1, position, shotTag) end)
+        local ok, answer = pcall(function() return remote:InvokeServer(1, position, shotTag) end)
         if destroyed or shotAttemptCount ~= request then return end
         shotInFlight = false
-        shotNotice = ok and ("Gun request #" .. request .. " via " .. remotePath .. " returned; hit UNVERIFIED")
-            or ("Gun remote " .. remotePath .. " error: " .. tostring(err):sub(1, 65))
+        shotNotice = ok and ("Gun request #" .. request .. " via " .. remotePath
+            .. " replied " .. tostring(answer):sub(1,24) .. "; hit UNVERIFIED")
+            or ("Gun remote " .. remotePath .. " error: " .. tostring(answer):sub(1,65))
+        local err = answer
         if enabled.AutoSilentShot then
             v54.silentAimReport = ok
                 and ("Auto Silent Shot #" .. request .. " requested; server hit UNVERIFIED")
@@ -4969,6 +4993,9 @@ toggle(v54.sheriffPage, "AUTO SHOOT • head target (1P/3P)", "AutoShootMurderer
     end
 end)
 toggle(v54.sheriffPage, "REQUIRE VISIBLE KNIFE (normal auto aim/shoot only)", "SheriffRequireVisibleKnife")
+makeButton(v54.sheriffPage, "TEST GUN MUZZLE / HITBOX (NO SHOT)", function()
+    v54.testGunRay()
+end)
 toggle(v54.sheriffPage, "AIM TORSO HITBOX (OFF = Head)", "AimTorso")
 toggle(v54.sheriffPage, "PREFER CreateBeam/AH2 (OFF = ShootGun/AH)", "PreferBeamRemote")
 makeSlider(v54.sheriffPage, "MOVEMENT PREDICTION", "ShotLead", 0, 0.18, 0.01, " s")
@@ -6550,15 +6577,24 @@ v54.espStepName = "SPECTRA_BoxesCombat_" .. tostring(localPlayer.UserId)
 v54.lastBoxFrame = -100
 v54.lastEspDataTick = -100
 v54.lastRoleRadarTick = -100
+v54.lastAimVisualFrame = -100
+v54.lastCombatVisualFrame = -100
 RunService:BindToRenderStep(v54.espStepName, Enum.RenderPriority.Camera.Value + 5, function()
     if destroyed then return end
-    if os.clock() - v54.lastBoxFrame >= 0.105 then
-        v54.lastBoxFrame = os.clock()
+    local now = os.clock()
+    if now - v54.lastBoxFrame >= 0.12 then
+        v54.lastBoxFrame = now
         v54.update2DBoxes()
         v54.updateSheriffCrosshair()
     end
-    v54.updateAimRing()
-    v54.updateCombatRadius()
+    if now - v54.lastAimVisualFrame >= 0.065 then
+        v54.lastAimVisualFrame = now
+        v54.updateAimRing()
+    end
+    if now - v54.lastCombatVisualFrame >= 0.15 then
+        v54.lastCombatVisualFrame = now
+        v54.updateCombatRadius()
+    end
 end)
 v54.cameraStepName = "LearningHub_Camera_" .. tostring(localPlayer.UserId)
 
