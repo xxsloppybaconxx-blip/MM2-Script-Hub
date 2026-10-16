@@ -1848,8 +1848,14 @@ watch(localPlayer.CharacterAdded:Connect(function(newCharacter)
         if not destroyed and localPlayer.Character == newCharacter then
             applyCharacterSettings()
             -- Re-test the active movement pack on respawn; saved prefs never auto-apply.
+            if v54.refreshAnimationRigButtons then v54.refreshAnimationRigButtons() end
             if v54.applyAnimationPack and v54.selectedAnimationPack ~= "Default" then
-                v54.applyAnimationPack(v54.selectedAnimationPack, true)
+                local selected = v54.animationPacks[v54.selectedAnimationPack]
+                if selected and selected.Rig == v54.animationRigName() then
+                    v54.applyAnimationPack(v54.selectedAnimationPack, true)
+                else
+                    v54.selectedAnimationPack = "Default"
+                end
             end
         end
     end)
@@ -4765,7 +4771,7 @@ v54.animationPacks = {
     ["Ninja"] = {
         Rig="R15", Idle={656117400,656118341,886842569},
         Walk=656121766, Run=656118852, Jump=656117878, Fall=656115533,
-        Swim=656119721, SwimIdle=656120116, Climb=656114359
+        Swim=656119721, SwimIdle=6561201162, Climb=656114359
     },
     ["Pirate"] = {
         Rig="R15", Idle={750782770,750785176,885515365},
@@ -4774,7 +4780,7 @@ v54.animationPacks = {
     },
     ["Robot"] = {
         Rig="R15", Idle={616088211,616089559,885531463},
-        Walk=616095330, Run=616091570, Jump=616086039, Fall=616087089,
+        Walk=616095330, Run=616091570, Jump=616090535, Fall=616087089,
         Swim=616092998, SwimIdle=616094091, Climb=616086039
     },
     ["Stylish"] = {
@@ -4804,8 +4810,8 @@ v54.animationPacks = {
     },
     ["Zombie"] = {
         Rig="R15", Idle={616158929,616160636,885545458},
-        Walk=616168032, Run=616163682, Jump=616161997, Fall=616157476,
-        Swim=616160636, SwimIdle=616168032, Climb=616156119
+        Walk=616168032, Run=616163682, Jump=616161997, Fall=616156119,
+        Swim=616157476, SwimIdle=616160636, Climb=616156119
     },
 }
 
@@ -4898,15 +4904,22 @@ v54.applyAnimationPack = function(name, quiet)
         local hum = character:FindFirstChildOfClass("Humanoid")
         local animate = character:FindFirstChild("Animate") or character:WaitForChild("Animate", 5)
         local animator = hum and hum:FindFirstChildOfClass("Animator")
-        if not animate or not animator or hum.RigType ~= Enum.HumanoidRigType.R15 then
-            v54.updatePackStatus("Pack not applied: requires R15, Animator and Animate")
+        if not animate or not animator or not hum then
+            v54.updatePackStatus("Pack not applied: missing Humanoid / Animator / Animate")
+            return
+        end
+        local rig = v54.animationRigName()
+        if rig ~= pack.Rig then
+            v54.updatePackStatus(name .. " needs " .. pack.Rig .. ", current rig " .. rig)
             return
         end
         -- Verify clips can really load before replacing active Animate references.
         -- Roblox may return a track but leave Length=0 for unavailable assets.
         local ready, approved, problems = 0, {}, {}
         local total = 0
-        for action, id in pairs(pack) do
+        for action, references in pairs(v54.packReferences) do
+            local id = v54.packAssetId(pack[action], 1)
+            if id and #references > 0 then
             total += 1
             task.spawn(function()
                 local probe = Instance.new("Animation")
@@ -4927,6 +4940,7 @@ v54.applyAnimationPack = function(name, quiet)
                 probe:Destroy()
                 ready += 1
             end)
+            end
         end
         local deadline = os.clock() + 4
         while ready < total and os.clock() < deadline
@@ -4935,7 +4949,7 @@ v54.applyAnimationPack = function(name, quiet)
         end
         if requestSequence ~= v54.animationPackSequence or destroyed then return end
         for _, action in ipairs({"Idle", "Walk", "Run"}) do
-            if not approved[action] then
+            if pack[action] and not approved[action] then
                 table.insert(problems, action)
             end
         end
@@ -4959,7 +4973,9 @@ v54.applyAnimationPack = function(name, quiet)
                 if clip and clip:IsA("Animation") then
                     if original[clip] == nil then original[clip] = clip.AnimationId end
                     -- Keep the original clip for any unavailable action.
-                    local chosenId = approved[action] and pack[action] or original[clip]
+                    local chosenId = approved[action] and
+                        v54.packAssetId(pack[action], table.find(references, pair) or 1)
+                        or original[clip]
                     if not approved[action] then skipped += 1 end
                     local ok = pcall(function() clip.AnimationId = chosenId end)
                     if ok then updated += 1 end
@@ -5019,16 +5035,39 @@ v54.recoverAvatarAnimations = function()
     v54.updatePackStatus(message)
     inform(message)
 end
-heading(pages["ANIMS"], "MOVEMENT ANIMATION PACKS (R15)")
-label(pages["ANIMS"], "Checks whether movement clips actually load before changing your avatar. Unavailable clips stay original; saved packs do NOT auto-apply at startup.",
-    90, Color3.fromRGB(184, 209, 245), 12)
-for _, name in ipairs({"Ninja", "Cartoony", "Levitation", "Stylish", "Popstar", "Patrol", "Sneaky", "Princess", "Zombie"}) do
-    local nameForButton = name
-    makeButton(pages["ANIMS"], "APPLY " .. nameForButton:upper() .. " PACK", function()
-        v54.stopAnimationPreview()
-        v54.applyAnimationPack(nameForButton, false)
-    end)
+heading(pages["ANIMS"], "MOVEMENT PACKS • RIG MATCH ONLY")
+v54.animationRigLabel = label(pages["ANIMS"], "Detecting character rig...", 80,
+    Color3.fromRGB(184,209,245), 12)
+v54.animationPackButtons = {}
+v54.refreshAnimationRigButtons = function()
+    local rig = v54.animationRigName()
+    if v54.animationRigLabel and v54.animationRigLabel.Parent then
+        v54.animationRigLabel.Text = "Detected body: " .. rig
+            .. ". Only matching packs are shown. Clips must load successfully."
+    end
+    for name, button in pairs(v54.animationPackButtons) do
+        local pack = v54.animationPacks[name]
+        if button and button.Parent then button.Visible = pack and pack.Rig == rig end
+    end
 end
+for _, packName in ipairs({
+    "R6 Free", "R15 Classic", "R6 Style on R15", "Rthro",
+    "Astronaut","Bubbly","Cartoony","Elder","Knight","Levitation",
+    "Mage","Ninja","Pirate","Robot","Stylish","Superhero",
+    "Toy","Vampire","Werewolf","Zombie"
+}) do
+    local name = packName
+    v54.animationPackButtons[name] = makeButton(pages["ANIMS"],
+        "APPLY " .. name:upper() .. " PACK", function()
+            if v54.animationRigName() ~= v54.animationPacks[name].Rig then
+                return inform("Wrong rig: " .. name .. " requires "
+                    .. v54.animationPacks[name].Rig)
+            end
+            v54.stopAnimationPreview()
+            v54.applyAnimationPack(name, false)
+        end)
+end
+v54.refreshAnimationRigButtons()
 makeButton(pages["ANIMS"], "EMERGENCY RESTORE original animations", function()
     v54.restoreAnimationPack(false)
 end)
