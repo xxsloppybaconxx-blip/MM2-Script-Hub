@@ -3107,6 +3107,14 @@ local function attemptMurdererShot(manual, headPriority)
     lastShotAttempt = now
     shotAttemptCount += 1
     local request = shotAttemptCount
+    -- A RemoteFunction may never return on a disconnected/unsupported server.
+    -- Release the local pending flag after a bounded wait so the mode recovers.
+    task.delay(4, function()
+        if destroyed or not shotInFlight or shotAttemptCount ~= request then return end
+        shotInFlight = false
+        shotNotice = "Gun request #" .. request .. " timed out; server did not reply"
+        if enabled.AutoSilentShot then v54.silentAimReport = shotNotice end
+    end)
     if enabled.AutoSilentShot then
         v54.silentAimReport = "Auto head shot #" .. request .. " pending • hit not confirmed"
     end
@@ -3114,8 +3122,8 @@ local function attemptMurdererShot(manual, headPriority)
         .. " pending; hit not confirmed"
     task.spawn(function()
         local ok, err = pcall(function() remote:InvokeServer(1, position, shotTag) end)
+        if destroyed or shotAttemptCount ~= request then return end
         shotInFlight = false
-        if destroyed then return end
         shotNotice = ok and ("Sent gun request #" .. request .. "; hit unconfirmed")
             or ("Gun remote error: " .. tostring(err):sub(1, 65))
         if enabled.AutoSilentShot then
@@ -3134,7 +3142,8 @@ v54.silentAimBindGun = function()
     if not gun or not equipped or v54.silentAimSeenGun[gun] then return end
     v54.silentAimSeenGun[gun] = true
     watch(gun.Activated:Connect(function()
-        if destroyed or not enabled.SilentAim or gun.Parent ~= characterOf(localPlayer) then return end
+        if destroyed or not enabled.SilentAim or enabled.AutoSilentShot
+            or gun.Parent ~= characterOf(localPlayer) then return end
         local role, source = getRole(localPlayer)
         if role ~= "Sheriff" or source ~= "game" then
             v54.silentAimReport = "Waiting for confirmed Sheriff role"
@@ -4361,15 +4370,14 @@ toggle(aimPage, "AUTO SHOOT • confirmed Murderer (Gun only)", "AutoShootMurder
     for _, refresh in ipairs(toggleUpdaters) do refresh() end
 end)
 toggle(aimPage, "AUTO SILENT SHOT • visible Murderer Head", "AutoSilentShot", function(on)
+    enabled.SilentAim = on
     if on then
-        enabled.SilentAim = true
         enabled.AutoShootMurderer = false
         enabled.AutoAimMurderer = false
         enabled.AimAssist = false
-        v54.silentAimBindGun()
-        v54.silentAimReport = "AUTO silent shot ON • requires clear line of sight"
+        v54.silentAimReport = "Auto Silent Shot ON • no L2, waits for a visible Murderer"
     else
-        v54.silentAimReport = "Auto Silent Shot OFF"
+        v54.silentAimReport = "Silent Aim OFF"
     end
     for _, refresh in ipairs(toggleUpdaters) do refresh() end
     inform(v54.silentAimReport)
@@ -4377,16 +4385,15 @@ end)
 heading(aimPage, "SILENT AIM • SHERIFF ONLY")
 label(aimPage, "SILENT AIM requests head shots when you fire normally. AUTO SILENT SHOT also attempts a cooldown-limited shot automatically when the Sheriff has a clear line of sight to the Murderer. No camera turn. Server may reject hits.", 100,
     Color3.fromRGB(194, 219, 247), 12)
-toggle(aimPage, "SILENT AIM • head target when firing Gun", "SilentAim", function(on)
+toggle(aimPage, "SILENT AIM • AUTOMATIC (no L2 required)", "SilentAim", function(on)
+    enabled.AutoSilentShot = on
     if on then
         enabled.AutoAimMurderer = false
         enabled.AimAssist = false
         enabled.AutoShootMurderer = false
-        v54.silentAimBindGun()
-        v54.silentAimReport = "ON • equip Gun as Sheriff, then fire"
+        v54.silentAimReport = "AUTO Silent Aim armed • watching for visible Murderer"
     else
         v54.silentAimReport = "OFF"
-        enabled.AutoSilentShot = false
     end
     for _, refresh in ipairs(toggleUpdaters) do refresh() end
     inform(v54.silentAimReport)
@@ -5751,30 +5758,55 @@ end)
 -- Server calls can yield; keep them out of the RenderStep and heartbeat.
 task.spawn(function()
     while not destroyed do
-        task.wait(0.28)
+        task.wait(0.42)
         if enabled.AutoShootMurderer and not enabled.AutoSilentShot then
             attemptMurdererShot(false, true)
         end
         if enabled.AutoSilentShot then
+            -- Completely independent of L2 and camera-lock controls.
             local role, source = getRole(localPlayer)
-            if source == "game" and role == "Sheriff" and alive(localPlayer) then
-                local gun, equipped = findGun()
-                local murderer = findConfirmedMurderer(true)
-                local head = murderer and characterOf(murderer)
-                    and characterOf(murderer):FindFirstChild("Head")
-                local camera = Workspace.CurrentCamera
-                if gun and equipped and head and camera
-                    and hasWallClearance(camera, head) then
-                    -- Gun muzzle line of sight is checked inside the shot routine.
-                    attemptMurdererShot(false, true)
-                else
-                    v54.silentAimReport = not gun and "Auto waiting: equip Sheriff Gun"
-                        or not murderer and "Auto waiting: no visible Murderer"
-                        or not head and "Auto waiting: missing target Head"
-                        or "Auto waiting: target behind wall or Gun unequipped"
-                end
+            local gun, equipped = findGun()
+            local roleAllowed = source == "game" and role == "Sheriff"
+                or source ~= "game" and role ~= "Murderer"
+                    and role ~= "Innocent" and role ~= "Hero" and gun ~= nil
+            if not alive(localPlayer) or not roleAllowed then
+                v54.silentAimReport = "Auto waiting: Sheriff role or unverified Gun tool"
+            elseif not gun then
+                v54.silentAimReport = "Auto waiting: Gun tool not found"
             else
-                v54.silentAimReport = "Auto Silent Shot requires confirmed Sheriff"
+                if not equipped then
+                    v54.equipSheriffGun()
+                    v54.silentAimReport = "Auto waiting: equipping Sheriff Gun"
+                else
+                    local murderer = findConfirmedMurderer(true)
+                    local char = murderer and characterOf(murderer)
+                    local head = char and char:FindFirstChild("Head")
+                    local camera = Workspace.CurrentCamera
+                    if not murderer then
+                        v54.silentAimReport = "Auto waiting: no Murderer role / visible Knife"
+                    elseif not head then
+                        v54.silentAimReport = "Auto waiting: Murderer Head missing"
+                    elseif not camera or not hasWallClearance(camera, head) then
+                        v54.silentAimReport = "Auto waiting: Murderer behind a solid wall"
+                    else
+                        local clear, reason = shootLineOfSight(murderer, head.Position, gun)
+                        if not clear then
+                            v54.silentAimReport = "Auto waiting: " .. tostring(reason)
+                        elseif shotInFlight then
+                            v54.silentAimReport = "Auto waiting: previous gun request"
+                        elseif os.clock() - lastShotAttempt < 2.5 then
+                            v54.silentAimReport = string.format(
+                                "Auto waiting: reload %.1fs", 2.5 - (os.clock()-lastShotAttempt))
+                        else
+                            -- Shot still requires acceptance by the game's server.
+                            local prior = shotAttemptCount
+                            attemptMurdererShot(false, true)
+                            if shotAttemptCount == prior then
+                                v54.silentAimReport = "Auto request blocked: " .. shotNotice
+                            end
+                        end
+                    end
+                end
             end
         end
     end
