@@ -2506,6 +2506,10 @@ local function flingSelected(targetOverride, onFinished)
     local origin = own.CFrame
     local startingTarget = theirRoot.Position
     local initialGap = (own.Position - theirRoot.Position).Magnitude
+    if v54.flingMode == "launch" and initialGap > 28 then
+        inform("Launch test needs target within 28 studs; long jumps can trigger Invalid Location")
+        return false
+    end
     local oldPlatformStand, oldRootCollision = humanoid.PlatformStand, own.CanCollide
     local saved = {
         Fly = enabled.Fly, Noclip = enabled.Noclip,
@@ -2531,6 +2535,7 @@ local function flingSelected(targetOverride, onFinished)
         local peakOwn, peakSpin, peakTarget, targetTravel = 0, 0, 0, 0
         local elapsed, closest, maxDrift, firstLaunchTime = 0, math.huge, 0, nil
         local followTravel, followSpeed, followSamples = 0, 0, 0
+        local lowestTargetY = startingTarget.Y
         local reason = "contact window elapsed"
         local spinAttachment, spinConstraint
         local success, failure = pcall(function()
@@ -2559,7 +2564,6 @@ local function flingSelected(targetOverride, onFinished)
             local spinCorrections = 0
             local lastCollisionProbe = -100
             local launchCorrections, lastLaunchPlacement = 0, -100
-            local lowestTargetY = startingTarget.Y
             local launchAxis = Vector3.new(startingTarget.X-origin.Position.X,0,
                 startingTarget.Z-origin.Position.Z)
             if launchAxis.Magnitude < 0.5 then
@@ -2729,6 +2733,7 @@ local function flingSelected(targetOverride, onFinished)
                 local speed = t.AssemblyLinearVelocity.Magnitude
                 followTravel = math.max(followTravel, distance)
                 followSpeed = math.max(followSpeed, speed)
+                lowestTargetY = math.min(lowestTargetY, t.Position.Y)
                 followSamples += 1
                 if not firstLaunchTime and distance > math.max(100, followBaseline + 60) then
                     firstLaunchTime = since
@@ -2748,9 +2753,12 @@ local function flingSelected(targetOverride, onFinished)
         flingBusy = false
         if not destroyed then
             local motion = math.max(targetTravel, followTravel)
-            local launchText = firstLaunchTime
-                and string.format("possible delayed launch at +%.2fs", firstLaunchTime)
-                or "no delayed launch observed"
+            local observedDrop = startingTarget.Y-lowestTargetY
+            local launchText = (observedDrop >= 50
+                and string.format("observed target %.0f studs below start LOCALLY", observedDrop))
+                or (firstLaunchTime
+                    and string.format("possible delayed launch at +%.2fs", firstLaunchTime))
+                or "no significant target launch observed"
             local contactText = canContact and "collision groups compatible" or "local collision test inconclusive"
             flingNotice = success and string.format(
                 "%s: %.2fs, %d placements (%d spin corrections), %d/%d overlap, %d gap>5, nearest %.1f, drift %.0f; own %.0f/s spin %.0f; target %.0f studs peak %.0f/s; lowest target Y %.1f; %s; %s; %s. LOCAL OBSERVATION ONLY.",
@@ -4821,6 +4829,12 @@ v54.flingModeToggle = makeButton(funPage, "MODE: CLASSIC • tap for SPIN", func
         .. " • local movement is not proof of server displacement")
 end)
 v54.refreshFlingModeText()
+makeButton(funPage, "LAUNCH SELECTED • PHYSICS CONTACT TEST", function()
+    if flingBusy or v54.flingAllActive then return inform("Finish the current contact test") end
+    v54.flingMode = "launch"
+    v54.refreshFlingModeText()
+    flingSelected()
+end)
 makeButton(funPage, "FLING SELECTED • CHOSEN MODE", function()
     flingSelected()
 end)
