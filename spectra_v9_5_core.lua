@@ -2538,8 +2538,10 @@ local function flingSelected(targetOverride, onFinished)
     local origin = own.CFrame
     local startingTarget = theirRoot.Position
     local initialGap = (own.Position - theirRoot.Position).Magnitude
-    if (v54.flingMode == "launch" or v54.flingMode == "touch") and initialGap > 28 then
-        inform("Launch test needs target within 28 studs; long jumps can trigger Invalid Location")
+    local contactStartLimit = v54.flingMode == "touch" and 15 or 28
+    if (v54.flingMode == "launch" or v54.flingMode == "touch")
+        and initialGap > contactStartLimit then
+        inform("Get within " .. contactStartLimit .. " studs for this contact test; longer jumps can trigger Invalid Location")
         return false
     end
     local oldPlatformStand, oldRootCollision = humanoid.PlatformStand, own.CanCollide
@@ -4902,7 +4904,7 @@ label(funPage, "LAUNCH tries pushing a selected player by moving your own charac
 makeSlider(funPage, "LAUNCH MOVEMENT SPEED", "LaunchSpeed", 150, 800, 25, " studs/s")
 makeSlider(funPage, "LAUNCH CONTACT TIME", "LaunchDuration", 0.8, 2.5, 0.1, " s")
 heading(funPage, "IY-INSPIRED TOUCH FLING")
-label(funPage, "Experimental touch-spin adapted from Infinite Yield's documented fling mechanism. Uses temporary local root angular force with short rotation pulses. Must be within 28 studs. May not move server-owned targets.", 95,
+label(funPage, "Experimental touch-spin adapted from Infinite Yield's documented fling mechanism. Uses temporary local root angular force with short rotation pulses. Must be within 15 studs. May not move server-owned targets.", 95,
     Color3.fromRGB(193,222,245), 12)
 makeSlider(funPage, "TOUCH SPIN SPEED", "TouchSpinSpeed", 1500, 30000, 500, " rad/s")
 makeSlider(funPage, "TOUCH TEST DURATION", "TouchDuration", 0.6, 2.3, 0.1, " s")
