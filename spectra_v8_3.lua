@@ -1461,59 +1461,108 @@ end))
 -- normal round HUD, inventory, player list, chat, or unrelated ScreenGuis.
 v54.roundResultNames = {
     roundresult=true, roundresults=true, roundresultscreen=true,
-    roundend=true, roundendscreen=true, endround=true, endroundscreen=true,
-    victory=true, victoryscreen=true, victoryframe=true,
-    resultframe=true, resultui=true, resultsgui=true, resultsscreen=true,
-    results=true, winscreen=true, winnergui=true, winnerscreen=true,
-    murdererwin=true, murdererwins=true, innocentswin=true,
-    innocentswins=true, sheriffwin=true, sheriffwins=true,
-    herowin=true, herowins=true, defeat=true, defeatscreen=true,
-    gameover=true, gameoverscreen=true, roundsummary=true,
+    roundend=true, roundendgui=true, roundendscreen=true, endround=true,
+    endroundscreen=true, endgame=true, endgamegui=true, endgamescreen=true,
+    victory=true, victorygui=true, victoryscreen=true, victoryframe=true,
+    defeat=true, defeatgui=true, defeatscreen=true,
+    resultframe=true, resultsframe=true, resultui=true, resultsgui=true,
+    resultsscreen=true, results=true, winners=true, winner=true,
+    winscreen=true, winscreengui=true, winframe=true,
+    winnergui=true, winnerscreen=true, winnersframe=true,
+    murdererwin=true, murdererwins=true, murdererwon=true,
+    murdererwinframe=true, murdererwinsgui=true,
+    innocentswin=true, innocentwin=true, innocentswins=true,
+    innocentswinframe=true, innocentswinsgui=true,
+    sheriffwin=true, sheriffwins=true, sheriffvictory=true,
+    herowin=true, herowins=true, gameover=true,
+    gameovergui=true, gameoverscreen=true, roundsummary=true,
 }
 v54.isRoundResultName = function(name)
     if type(name) ~= "string" then return false end
     local compact = string.lower(name):gsub("[^%w]", "")
     return v54.roundResultNames[compact] == true
-        or compact:match("^roundresult[%w]*$") ~= nil
-        or compact:match("^victory[%w]*screen$") ~= nil
+        or compact:match("^roundresults?[%w]*$") ~= nil
+        or compact:match("^roundends?[%w]*$") ~= nil
+        or compact:match("^endgame[%w]*$") ~= nil
+        or compact:match("^victory[%w]*$") ~= nil
+        or compact:match("^murdererwins?[%w]*$") ~= nil
+        or compact:match("^innocents?wins?[%w]*$") ~= nil
+        or compact:match("^winnerscreen[%w]*$") ~= nil
+        or compact:match("^gameover[%w]*$") ~= nil
 end
 v54.isRoundResultText = function(value)
     if type(value) ~= "string" then return false end
-    local t = string.lower(value):gsub("[^%w]", "")
-    return t == "victory" or t == "youwin" or t == "youwon"
-        or t == "innocentswin" or t == "innocentswins"
-        or t == "murdererwin" or t == "murdererwins"
-        or t == "sheriffwin" or t == "sheriffwins"
-        or t == "roundover" or t == "roundresults"
+    -- RichText often wraps win text in formatting tags.
+    local t = string.lower(value:gsub("<[^>]+>", "")):gsub("[^%w]", "")
+    if #t < 3 or #t > 85 then return false end
+    return t == "victory" or t == "defeat" or t == "youwin" or t == "youwon"
+        or t == "roundover" or t == "roundresults" or t == "gameover"
+        or t:match("^the?innocents?wins?$") ~= nil
+        or t:match("^innocents?wins?$") ~= nil
+        or t:match("^the?murdererwins?$") ~= nil
+        or t:match("^murdererwins?$") ~= nil
+        or t:match("^sheriffwins?$") ~= nil
+        or t:match("^herowins?$") ~= nil
+        or t:find("innocentshavewon", 1, true) ~= nil
+        or t:find("murdererhaswon", 1, true) ~= nil
+        or t:find("sheriffhassavedtheday", 1, true) ~= nil
+        or t:find("herohassavedtheday", 1, true) ~= nil
+        or t:find("murderervictory", 1, true) ~= nil
+        or t:find("innocentvictory", 1, true) ~= nil
+end
+-- Hide the surrounding result panel when a result label is nested in
+-- a generic-named frame. Never hide the broad game HUD by name alone.
+v54.resultContainerFor = function(item, manual)
+    local camera = Workspace.CurrentCamera
+    local view = camera and camera.ViewportSize or Vector2.new(800, 500)
+    local candidate, node, hops = nil, item.Parent, 0
+    while node and node ~= playerGui and hops < 6 do
+        if node:IsA("ScreenGui") then
+            if v54.isRoundResultName(node.Name) then return node end
+            break
+        end
+        if node:IsA("GuiObject") and node.Visible then
+            if v54.isRoundResultName(node.Name) then return node end
+            local nm = node.Name:lower()
+            local sz = node.AbsoluteSize
+            local centreX = node.AbsolutePosition.X + sz.X/2
+            local centreY = node.AbsolutePosition.Y + sz.Y/2
+            local centered = math.abs(centreX - view.X/2) <= view.X * 0.38
+                and math.abs(centreY - view.Y/2) <= view.Y * 0.39
+            local notRoot = nm ~= "main" and nm ~= "hud" and nm ~= "maingui"
+                and nm ~= "gamegui" and nm ~= "container"
+            if centered and notRoot and sz.X >= 115 and sz.Y >= 50
+                and (manual or (sz.X <= view.X * 0.92
+                    and sz.Y <= view.Y * 0.90)) then
+                candidate = candidate or node
+            end
+        end
+        node = node.Parent
+        hops += 1
+    end
+    return candidate or item
 end
 v54.clearRoundResults = function(manual)
     if destroyed or not playerGui or not playerGui.Parent then return 0 end
     local hidden = 0
     local claimed = {}
     for _, item in ipairs(playerGui:GetDescendants()) do
-        if item ~= gui and not item:IsDescendantOf(gui) then
-            if item:IsA("ScreenGui") and item.Enabled and v54.isRoundResultName(item.Name) then
-                item.Enabled = false
-                claimed[item] = true
-                hidden += 1
-            elseif item:IsA("GuiObject") and item.Visible then
-                if v54.isRoundResultName(item.Name) then
-                    item.Visible = false
-                    claimed[item] = true
-                    hidden += 1
-                elseif item:IsA("TextLabel") and v54.isRoundResultText(item.Text) then
-                    -- Some MM2 builds name only the win TextLabel, not its container.
-                    -- Never disable a generic parent ScreenGui or broad HUD frame.
-                    local parent = item.Parent
-                    if parent and parent:IsA("Frame") and parent.Visible
-                        and parent.Size.X.Scale <= 0.95 and parent.Size.Y.Scale <= 0.95
-                        and not claimed[parent] and parent.Name ~= "Main" then
-                        parent.Visible = false
-                        claimed[parent] = true
-                    else
-                        item.Visible = false
-                        claimed[item] = true
+        if item ~= gui and item ~= boxGui
+            and not item:IsDescendantOf(gui) and not item:IsDescendantOf(boxGui) then
+            local recognized = v54.isRoundResultName(item.Name)
+            local textMatch = (item:IsA("TextLabel") or item:IsA("TextButton"))
+                and v54.isRoundResultText(item.Text)
+            if recognized or textMatch then
+                local selected = recognized and item or v54.resultContainerFor(item, manual)
+                if selected:IsA("ScreenGui") then
+                    if selected.Enabled and not claimed[selected] then
+                        selected.Enabled = false
+                        claimed[selected] = true
+                        hidden += 1
                     end
+                elseif selected:IsA("GuiObject") and selected.Visible and not claimed[selected] then
+                    selected.Visible = false
+                    claimed[selected] = true
                     hidden += 1
                 end
             end
@@ -1521,10 +1570,19 @@ v54.clearRoundResults = function(manual)
     end
     v54.roundResultHiddenTotal += hidden
     if hidden > 0 then
-        v54.roundResultNotice = string.format("Cleared %d result element(s) • session %d", hidden, v54.roundResultHiddenTotal)
+        v54.roundResultNotice = string.format("Cleared %d winner panel(s) • session %d",
+            hidden, v54.roundResultHiddenTotal)
         if manual then inform(v54.roundResultNotice) end
     elseif manual then
-        v54.roundResultNotice = "No visible known round-result UI found"
+        local visible = {}
+        for _, candidate in ipairs(playerGui:GetChildren()) do
+            if candidate:IsA("ScreenGui") and candidate ~= gui and candidate ~= boxGui
+                and candidate.Enabled and #visible < 6 then
+                table.insert(visible, candidate.Name)
+            end
+        end
+        v54.roundResultNotice = "No recognized result. Game UI names: "
+            .. (#visible > 0 and table.concat(visible, ", ") or "none")
         inform(v54.roundResultNotice)
     end
     if v54.roundResultStatusLabel and v54.roundResultStatusLabel.Parent then
@@ -1533,9 +1591,9 @@ v54.clearRoundResults = function(manual)
     return hidden
 end
 v54.manualClearRoundResults = function()
-    -- Keep watching briefly in case a stuck animation makes the overlay reappear.
-    v54.roundResultManualUntil = os.clock() + 12
-    v54.clearRoundResults(true)
+    -- Results can get recreated by delayed animations; briefly rescan.
+    v54.roundResultManualUntil = os.clock() + 18
+    return v54.clearRoundResults(true)
 end
 
 -- Movement and local utilities ----------------------------------------
@@ -5296,7 +5354,7 @@ watch(RunService.Heartbeat:Connect(function(delta)
     local ownRoot = rootOf(localPlayer)
     if enabled.Noclip then v54.applyNoclip() end
     if (enabled.AutoHideRoundResults or now < v54.roundResultManualUntil)
-        and now - v54.roundResultLastScan >= 0.4 then
+        and now - v54.roundResultLastScan >= 0.22 then
         v54.roundResultLastScan = now
         local ok, err = pcall(v54.clearRoundResults, false)
         if not ok then
