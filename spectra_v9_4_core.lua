@@ -5428,9 +5428,22 @@ v54.previewButton = makeButton(pages["ANIMS"], "PREVIEW animation ID", function(
     track.Priority = Enum.AnimationPriority.Action
     track.Looped = false
     local played, err = pcall(function() track:Play(0.12, 1, v54.animationSpeed) end)
-    v54.animationStatus = played and ("Previewing " .. digits .. " at " .. v54.animationSpeed .. "x")
+    v54.animationStatus = played and ("Preview request for " .. digits .. " at " .. v54.animationSpeed .. "x")
         or ("Preview error: " .. tostring(err):sub(1, 72))
     inform(v54.animationStatus)
+    task.delay(1.6, function()
+        if destroyed or v54.animationTrack ~= track then return end
+        if track.Length <= 0 then
+            v54.animationStatus = "Preview " .. digits
+                .. " did NOT load. Asset may be private, unavailable, or wrong rig."
+        else
+            v54.animationStatus = "Preview " .. digits .. " loaded ("
+                .. string.format("%.2f",track.Length) .. "s); movements are visual only."
+        end
+        if v54.animationStatusLabel and v54.animationStatusLabel.Parent then
+            v54.animationStatusLabel.Text = v54.animationStatus
+        end
+    end)
 end)
 -- Catalog previews use the supplied IDs, but do NOT claim asset ownership.
 -- They are only visible on the rig these clips were authored for.
