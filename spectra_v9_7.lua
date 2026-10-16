@@ -8,7 +8,7 @@ local playerGui = localPlayer:WaitForChild("PlayerGui", 12)
 if not playerGui then warn("[SPECTRA v9.7] PlayerGui timed out") return end
 
 -- Remove previously failed recovery panels; they can remain on top of the new UI.
-for _, oldName in ipairs({"SpectraV84Recovery", "SpectraV85Recovery", "SpectraV86Recovery", "SpectraV87Recovery", "SpectraV88Recovery", "SpectraV89Recovery", "SpectraV90Recovery", "SpectraV91Recovery", "SpectraV92Recovery", "SpectraV93Recovery", "SpectraV94Recovery", "SpectraV95Recovery", "SpectraV97Recovery"}) do
+for _, oldName in ipairs({"SpectraV84Recovery", "SpectraV85Recovery", "SpectraV86Recovery", "SpectraV87Recovery", "SpectraV88Recovery", "SpectraV89Recovery", "SpectraV90Recovery", "SpectraV91Recovery", "SpectraV92Recovery", "SpectraV93Recovery", "SpectraV94Recovery", "SpectraV95Recovery", "SpectraV96Recovery", "SpectraV97Recovery"}) do
     local previous = playerGui:FindFirstChild(oldName)
     if previous then pcall(function() previous:Destroy() end) end
 end
@@ -51,7 +51,7 @@ local function label(text,y,h)
     item.Parent=panel
     return item
 end
-label("◈ SPECTRA 9.6 • Startup Recovery",8,32)
+label("◈ SPECTRA 9.7 • Startup Recovery",8,32)
 local status=label("Creating recovery UI…",43,78)
 status.Font=Enum.Font.Gotham
 status.TextSize=12
