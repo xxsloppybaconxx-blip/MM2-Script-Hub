@@ -1464,8 +1464,8 @@ v54.update2DBoxes = function()
                     local projectedParts = 0
                     for _, part in ipairs(char:GetChildren()) do
                         if part:IsA("BasePart") and part ~= root
-                            and part.Transparency < 0.98
-                            and not part.Name:lower():find("hitbox",1,true) then
+                            and (part.Transparency < 0.98
+                                or part.Name:lower():find("hitbox",1,true)) then
                             local cf, half = part.CFrame, part.Size * 0.5
                             local fullyInFront = true
                             local pl, pt, pr, pb = math.huge,math.huge,-math.huge,-math.huge
@@ -3804,7 +3804,7 @@ v54.frontStackAction = function(mode)
     local token = v54.frontActionToken
     v54.frontActionBusy = true
     -- Sheriff mirrors the Murderer front-stack placement algorithm, but
-    -- only queues ONE Murderer target and uses Gun head-position shots.
+    -- only queues ONE Murderer target and fires at the selected body hitbox.
     v54.sheriffFrontShotActive = not isMurder
     local count = #targets
     local moveSelf = not isMurder and enabled.SheriffFrontMoveSelf
@@ -3882,7 +3882,7 @@ v54.frontStackAction = function(mode)
                     -- Never fire into a fake local target position by default.
                     if not moveSelf or os.clock() - shooterMovedAt >= 0.28 then
                         local prior = shotAttemptCount
-                        attemptMurdererShot(false, true)
+                        attemptMurdererShot(false, false)
                         if shotAttemptCount > prior then attackRequests += 1 end
                     else
                         shotNotice = "Settling Sheriff position before firing"
@@ -4355,7 +4355,7 @@ v54.updateAimRing = function()
         local knifeOK = not enabled.SheriffRequireVisibleKnife or v54.isMurdererKnifeVisible(murderer)
         v54.ringStroke.Color = ((frontMode and murderer ~= nil) or (inside and knifeOK))
             and Color3.fromRGB(72,240,144) or Color3.fromRGB(255,100,118)
-        v54.sheriffRingText.Text = frontMode and "SHERIFF: FRONT HEADSHOT • KNIFE NOT REQUIRED"
+        v54.sheriffRingText.Text = frontMode and "SHERIFF: FRONT HITBOX SHOT • KNIFE NOT REQUIRED"
             or ((not knifeOK and "SHERIFF: KNIFE HIDDEN • PAUSED")
                 or (inside and "SHERIFF: IN RADIUS" or "SHERIFF: OUT OF RADIUS"))
                 .. (enabled.AutoShootMurderer and " • AUTO SHOOT" or " • AIM")
@@ -4948,7 +4948,7 @@ makeSlider(v54.sheriffPage, "FRONT SHOT DISTANCE", "SheriffFrontDistance", 8, 30
 toggle(v54.sheriffPage, "FRONT: move ME near real Murderer (recommended)", "SheriffFrontMoveSelf")
 label(v54.sheriffPage, "Recommended ON: moves your Sheriff within range of the actual Murderer, facing their Head. OFF: old local-only target relocation (can show ghost hits). Server shots remain unverified.", 92,
     Color3.fromRGB(190, 215, 244), 12)
-makeButton(v54.sheriffPage, "ONE MURDERER IN FRONT + AUTO GUN HEADSHOT", function()
+makeButton(v54.sheriffPage, "ONE MURDERER IN FRONT + HITBOX SHOT", function()
     v54.frontStackAction("sheriff")
 end)
 makeButton(v54.sheriffPage, "SHOOT MURDERER HEAD • one request", function()
@@ -6317,7 +6317,7 @@ task.spawn(function()
     while not destroyed do
         task.wait(0.42)
         if enabled.AutoShootMurderer and not enabled.AutoSilentShot then
-            attemptMurdererShot(false, true)
+            attemptMurdererShot(false, false)
         end
         if enabled.AutoSilentShot then
             -- Completely independent of L2 and camera-lock controls.
@@ -6359,7 +6359,7 @@ task.spawn(function()
                         else
                             -- Shot still requires acceptance by the game's server.
                             local prior = shotAttemptCount
-                            attemptMurdererShot(false, true)
+                            attemptMurdererShot(false, false)
                             if shotAttemptCount == prior then
                                 v54.silentAimReport = "Auto request blocked: " .. shotNotice
                             end
