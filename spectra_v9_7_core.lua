@@ -276,7 +276,31 @@ local function distanceTo(part)
     return ownRoot and (ownRoot.Position - part.Position).Magnitude or nil
 end
 
--- Hints ONLY based on an equipped Tool that other players can see.
+-- Detect skinned MM2 gun Tools by name OR their replicated shooting interface.
+local function isGunTool(tool)
+    if not tool or not tool:IsA("Tool") then return false end
+    local n = tool.Name:lower()
+    if n == "gun" or n:find("revolver",1,true) or n:find("pistol",1,true)
+        or n:find("handgun",1,true) then return true end
+    local server = tool:FindFirstChild("KnifeServer")
+    local shoot = server and server:FindFirstChild("ShootGun")
+    if shoot and shoot:IsA("RemoteFunction") then return true end
+    local client = tool:FindFirstChild("KnifeLocal")
+    local beam = client and client:FindFirstChild("CreateBeam")
+    local remote = beam and beam:FindFirstChild("RemoteFunction")
+    return remote and remote:IsA("RemoteFunction") or false
+end
+local function hasMyGun()
+    for _, container in ipairs({characterOf(localPlayer),localPlayer:FindFirstChildOfClass("Backpack")}) do
+        if container then
+            for _, child in ipairs(container:GetChildren()) do
+                if isGunTool(child) then return true end
+            end
+        end
+    end
+    return false
+end
+-- Other-player weapon hints are only inferred from equipped Tools.
 local function visibleWeaponHint(p)
     local char = characterOf(p)
     if not char then return "Unknown" end
@@ -284,9 +308,7 @@ local function visibleWeaponHint(p)
         if child:IsA("Tool") then
             local name = child.Name:lower()
             if name:find("knife", 1, true) then return "Knife visible" end
-            if name:find("gun", 1, true) or name:find("revolver", 1, true) then
-                return "Gun visible"
-            end
+            if isGunTool(child) then return "Gun visible" end
         end
     end
     return "Unknown"
@@ -299,7 +321,7 @@ end
 
 -- Non-overlapping fast role feed: default 1.5s; no blind trust in hints.
 local validRole = { Murderer=true, Sheriff=true, Innocent=true, Hero=true }
-v54.roleRefreshSeconds = 0.9 -- bounded polling, with event-triggered local role refresh
+v54.roleRefreshSeconds = 1.2 -- bounded polling + immediate tool/attribute refresh
 v54.roleRemote = nil
 v54.roleRemoteNextSearch = -100
 v54.normalizeRole = function(value)
@@ -373,14 +395,14 @@ end
 local function getRole(player)
     if not player then return "Unknown", "none", false end
     local char = characterOf(player)
+    local pickedUpGun = player == localPlayer and hasMyGun()
     local rawAttribute = player:GetAttribute("Role") or player:GetAttribute("CurrentRole")
         or (char and (char:GetAttribute("Role") or char:GetAttribute("CurrentRole")))
     local attrRole = v54.normalizeRole(rawAttribute)
     if attrRole then
         -- Attributes occasionally lag a dropped-Gun pickup. Mark a temporary
         -- Hero *hint* instead of falsely showing confirmed Innocent status.
-        if player == localPlayer and attrRole == "Innocent"
-            and visibleWeaponHint(player) == "Gun visible" then
+        if pickedUpGun and attrRole == "Innocent" then
             return "Hero", "hint", false
         end
         return attrRole, "game", false
@@ -388,13 +410,13 @@ local function getRole(player)
     if os.clock() - roleLastUpdate <= 2.5 then
         local info = roleMap[player.Name]
         if info then
-            if player == localPlayer and info.role == "Innocent"
-                and visibleWeaponHint(player) == "Gun visible" then
+            if pickedUpGun and info.role == "Innocent" then
                 return "Hero", "hint", false
             end
             return info.role, "game", info.dead
         end
     end
+    if pickedUpGun then return "Hero", "hint", false end
     local hint = visibleWeaponHint(player)
     if hint == "Knife visible" then return "Murderer", "hint", false end
     if hint == "Gun visible" then
@@ -450,6 +472,22 @@ v54.observeRolePlayer = function(player)
     end))
     v54.observeRoleCharacter(player,player.Character)
 end
+-- Backpack receives dropped Sheriff Gun before it appears on the character.
+v54.seenBackpack = setmetatable({}, {__mode="k"})
+v54.observeBackpack = function(bag)
+    if not bag or v54.seenBackpack[bag] then return end
+    v54.seenBackpack[bag] = true
+    watch(bag.ChildAdded:Connect(function(item)
+        if item:IsA("Tool") then v54.roleChangedSignal(localPlayer) end
+    end))
+    watch(bag.ChildRemoved:Connect(function(item)
+        if item:IsA("Tool") then v54.roleChangedSignal(localPlayer) end
+    end))
+end
+v54.observeBackpack(localPlayer:FindFirstChildOfClass("Backpack"))
+watch(localPlayer.ChildAdded:Connect(function(item)
+    if item:IsA("Backpack") then v54.observeBackpack(item) end
+end))
 for _, player in ipairs(Players:GetPlayers()) do
     v54.observeRolePlayer(player)
 end
@@ -3210,22 +3248,14 @@ end
 -- Known MM2 gun variants expose KnifeServer.ShootGun or a CreateBeam RemoteFunction.
 local function findGun()
     local char = characterOf(localPlayer)
-    local backpack = localPlayer:FindFirstChildOfClass("Backpack")
-    for _, container in ipairs({char, backpack}) do
+    for _, container in ipairs({char,localPlayer:FindFirstChildOfClass("Backpack")}) do
         if container then
             for _, tool in ipairs(container:GetChildren()) do
-                if tool:IsA("Tool") then
-                    local name = tool.Name:lower()
-                    if name == "gun" or name:find("revolver",1,true)
-                        or name:find("pistol",1,true)
-                        or name:find("handgun",1,true) then
-                        return tool, tool.Parent == char
-                    end
-                end
+                if isGunTool(tool) then return tool,tool.Parent == char end
             end
         end
     end
-    return nil, false
+    return nil,false
 end
 
 -- The role feed can lag after a new round. If no verified role is available,
@@ -3254,7 +3284,7 @@ v54.updateSheriffCrosshair = function()
     -- The equipped Tool is the immediate source of truth; the role remote
     -- might still say Innocent for the first second after pickup.
     v54.sheriffCrosshair.Visible = enabled.ShowSheriffCrosshair
-        and tool ~= nil and equipped and alive(localPlayer) or false
+        and tool ~= nil and alive(localPlayer) or false
     if not v54.sheriffCrosshair.Visible then return end
     local length = math.clamp(numbers.CrosshairSize,8,36)
     local gap = math.max(5,math.floor(length*0.44))
@@ -4394,7 +4424,7 @@ local function updateRoleRadar()
     if v54.yourRoleLiveLabel and v54.yourRoleLiveLabel.Parent then
         local _, armed = findGun()
         v54.yourRoleLiveLabel.Text = "YOUR ROLE: " .. roleDisplay(yourRole,yourSource)
-            .. (armed and "  •  GUN EQUIPPED" or "")
+            .. (armed and "  •  GUN EQUIPPED" or (hasMyGun() and "  •  GUN IN BACKPACK" or ""))
         v54.yourRoleLiveLabel.TextColor3 = getRoleColor(yourRole,yourSource)
     end
     local murderer, sheriff, hero = "?", "?", "?"
@@ -4463,6 +4493,7 @@ toggle(visualsPage, "Limit ESP distance", "RangeLimit")
 makeSlider(visualsPage, "ESP RANGE", "ESPRange", 50, 1500, 10, " studs")
 toggle(visualsPage, "Player ESP", "PlayerESP")
 toggle(visualsPage, "2D BOX ESP • body-only (no self)", "BoxESP2D")
+toggle(visualsPage, "Crosshair on Sheriff / picked-up Gun", "ShowSheriffCrosshair")
 toggle(visualsPage, "Show names", "Names")
 toggle(visualsPage, "Show distance", "Distances")
 toggle(visualsPage, "Health labels", "Health")
@@ -4476,7 +4507,7 @@ toggle(visualsPage, "Alert on new named dropped guns", "GunAlerts")
 toggle(visualsPage, "Dropped knife markers", "KnifeESP", function() scanObjects() end)
 toggle(visualsPage, "Coin markers", "CoinESP", function() scanObjects() end)
 toggle(visualsPage, "Seasonal item markers (name-based)", "EventESP", function() scanObjects() end)
-label(visualsPage, "Game roles update every six seconds when the MM2 role feed is accessible. " ..
+label(visualsPage, "Roles sync from the MM2 feed and update promptly on equipped or picked-up tools. " ..
     "Otherwise tool colors and question marks are observations only.", 55,
     Color3.fromRGB(160, 173, 194), 12)
 
@@ -4868,13 +4899,12 @@ toggle(v54.sheriffPage, "AUTO SHOOT • head target (1P/3P)", "AutoShootMurderer
 end)
 toggle(v54.sheriffPage, "REQUIRE VISIBLE KNIFE (normal auto aim/shoot only)", "SheriffRequireVisibleKnife")
 toggle(v54.sheriffPage, "SHOW AIM/SHOT RADIUS RING", "CombatRadius")
+toggle(v54.sheriffPage, "CROSSHAIR ON SHERIFF/HERO GUN", "ShowSheriffCrosshair")
 toggle(v54.sheriffPage, "D-PAD ↓: MURDERER IN FRONT (OFF = auto aim)", "SheriffDpadFrontLock")
 toggle(v54.sheriffPage, "AIM LOCK • confirmed Murderer (uses Knife setting)", "AutoAimMurderer")
 makeButton(v54.sheriffPage, "EQUIP GUN FROM BACKPACK", function()
-    local role, source = getRole(localPlayer)
-    if source ~= "game" or (role ~= "Sheriff" and role ~= "Hero") then
-        return inform("Equip requires a confirmed Sheriff/Hero")
-    end
+    if not alive(localPlayer) then return inform("You must respawn first") end
+    -- A picked-up Gun is enough to allow equipping, even if the role feed still says Innocent.
     local gun, equipped = findGun()
     local hum = humanOf(localPlayer)
     if not gun or not hum then return inform("No usable Gun in Backpack or character") end
