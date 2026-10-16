@@ -119,6 +119,8 @@ local enabled = {
     AutoShootMurderer = false,
     SilentAim = false,
     AutoSilentShot = false,
+    SheriffRapidFire = false,
+    ShowSheriffCrosshair = true,
     SheriffDpadFrontLock = true, -- Down runs front-lock test; toggle OFF for ordinary auto aim
     SheriffFrontMoveSelf = true, -- Place your character near the Murderer; don't fabricate target positions on your client
     SheriffRequireVisibleKnife = true, -- Normal sheriff auto aim/shoot only; NEVER gate front-stack
@@ -127,7 +129,7 @@ local enabled = {
     ControllerHoldAim = true,
     LocalGhost = false,
 }
-local numbers = { Speed = 24, Jump = 65, FlySpeed = 45, FOV = 70, ESPRange = 250, FarmRadius = 1000, FarmFlySpeed = 25, FarmTeleportDelay = 2.5, AimRadius = 210, AimSmooth = 0.54, FarmVisitCap = 40, KnifeAuraRadius = 12, SheriffFrontDistance = 14, SpinFlingSpeed = 2400, SpinFlingDuration = 2.25, Gravity = Workspace.Gravity }
+local numbers = { Speed = 24, Jump = 65, FlySpeed = 45, FOV = 70, ESPRange = 250, FarmRadius = 1000, FarmFlySpeed = 25, FarmTeleportDelay = 2.5, AimRadius = 210, AimSmooth = 0.54, FarmVisitCap = 40, KnifeAuraRadius = 12, SheriffFrontDistance = 14, SpinFlingSpeed = 2400, SpinFlingDuration = 2.25, SheriffRapidInterval = 1.1, CrosshairSize = 16, CrosshairOpacity = 0.96, Gravity = Workspace.Gravity }
 -- Save a copy of defaults before users customize settings.
 local playerEffects = {}
 local objectEffects = {}
@@ -192,6 +194,11 @@ v54.gamepadAimHeld = false
 v54.gamepadFlyUp, v54.gamepadFlyDown = false, false
 v54.lastGamepadInput = "No controller input"
 v54.gamepadInputCount = {up=0, down=0, l2=0}
+v54.lastObjectMarkerTick = -100
+v54.targetTeleportBusy = false
+v54.targetTeleportToken = 0
+v54.targetTeleportReport = "Target teleport test idle"
+v54.targetTeleportLabel = nil
 v54.gamepadLastDispatch = {}
 v54.sheriffFrontArmed = false
 v54.sheriffFrontLastTry = -100
@@ -1210,7 +1217,7 @@ local function updatePlayerEffects(timeNow)
                         or Enum.HighlightDepthMode.Occluded
                     e.billboard.Enabled = enabled.Names or enabled.Distances or enabled.WeaponHints or enabled.Health or enabled.ShowRoles
                     local pieces = {}
-                    if enabled.Names then table.insert(pieces, p.DisplayName) end
+                    if enabled.Names then table.insert(pieces, "@" .. p.Name) end
                     local root = rootOf(p)
                     local distance = root and distanceTo(root)
                     if enabled.Distances and distance then
@@ -1398,12 +1405,15 @@ end
 local function objectType(obj)
     if not obj:IsA("BasePart") and not obj:IsA("Model") then return nil end
     local name = obj.Name:lower()
-    if (name == "gundrop" or name == "droppedgun" or name == "dropped_gun") then
+    if (name == "gundrop" or name == "droppedgun" or name == "dropped_gun"
+        or name == "pistoldrop" or name == "droppedpistol"
+        or name == "gunpickup" or name == "gun_drop") then
         return "Gun"
     elseif name == "knifedrop" or name == "droppedknife" or name == "dropped_knife" then
         return "Knife"
     elseif name == "coin" or name == "coinpart" or name == "coin_server"
-        or name == "coinpickup" or name == "token"
+        or name == "coinpickup" or name == "token" or name == "tokenpart"
+        or name == "goldtoken" or name == "tokenpickup"
         or (obj:IsA("BasePart") and obj:FindFirstChild("CoinVisual")) then
         return "Coin"
     elseif name == "candy" or name == "shell" or name == "gem"
@@ -3063,10 +3073,19 @@ local function shootLineOfSight(target, destination, gun)
     return false, "Gun muzzle is obstructed"
 end
 
+-- The server may enforce its own reload timer independently of these
+-- client-side request intervals. Never present sent requests as confirmed hits.
+v54.sheriffShotCooldown = function()
+    local role, source = getRole(localPlayer)
+    if enabled.SheriffRapidFire and source == "game" and role == "Sheriff" then
+        return math.clamp(numbers.SheriffRapidInterval, 0.65, 2.5)
+    end
+    return 2.5
+end
 local function attemptMurdererShot(manual, headPriority)
     if destroyed or shotInFlight then return end
     local now = os.clock()
-    if now - lastShotAttempt < 2.5 then
+    if now - lastShotAttempt < v54.sheriffShotCooldown() then
         if manual then inform("Gun cooldown • wait before shooting again") end
         return
     end
@@ -5485,7 +5504,7 @@ label(settingsPage, "Save preferences for next session. Uses executor readfile/w
 v54.settingsFile = "SPECTRA_MM2_settings_v5_9.json"
 v54.safeActive = {
     AutoCoinFarm = true, AutoGunPickup = true, AutoGunApproach = true,
-    AutoShootMurderer = true, SilentAim = true, AutoSilentShot = true,
+    AutoShootMurderer = true, SilentAim = true, AutoSilentShot = true, SheriffRapidFire = true,
     CoinTeleport = true, CoinFlight = true, MurderAura = true, MurderAuraApproach = true, FlingActive = true, Fly = true, SpinMode = true,
     CameraLock = true, Sprint = true, Noclip = true, AutoAimMurderer = true,
 }
@@ -5916,9 +5935,9 @@ task.spawn(function()
                             v54.silentAimReport = "Auto waiting: " .. tostring(reason)
                         elseif shotInFlight then
                             v54.silentAimReport = "Auto waiting: previous gun request"
-                        elseif os.clock() - lastShotAttempt < 2.5 then
+                        elseif os.clock() - lastShotAttempt < v54.sheriffShotCooldown() then
                             v54.silentAimReport = string.format(
-                                "Auto waiting: reload %.1fs", 2.5 - (os.clock()-lastShotAttempt))
+                                "Auto waiting: reload %.1fs", v54.sheriffShotCooldown() - (os.clock()-lastShotAttempt))
                         else
                             -- Shot still requires acceptance by the game's server.
                             local prior = shotAttemptCount
@@ -6012,6 +6031,14 @@ watch(RunService.Heartbeat:Connect(function(delta)
             inform("Anti-void recovery attempted")
         end
     end
+    -- New drops arrive through DescendantAdded. Keep markers responsive
+    -- without rescanning all Workspace descendants every frame.
+    if now - v54.lastObjectMarkerTick >= 0.25 then
+        v54.lastObjectMarkerTick = now
+        if enabled.GunESP or enabled.CoinESP or enabled.KnifeESP or enabled.EventESP then
+            updateObjects()
+        end
+    end
     if now - lastVisualTick >= 0.72 then
         lastVisualTick = now
         v54.refreshSliders()
@@ -6027,7 +6054,7 @@ watch(RunService.Heartbeat:Connect(function(delta)
         v54.updateControllerStatus()
         updatePlayerEffects(now)
         updateTracers()
-        updateObjects()
+        -- Marker distances refresh independently at 4Hz, below.
         -- Update already-enabled settings in case of respawn/map changes.
         if enabled.Fullbright then v54.setFullbright(true) end
         if enabled.LowFX then v54.setLowFX(true) end
@@ -6122,6 +6149,8 @@ local function unload()
     enabled.AutoAimMurderer = false
     enabled.SilentAim = false
     enabled.AutoSilentShot = false
+    enabled.SheriffRapidFire = false
+    v54.targetTeleportToken += 1
     v54.gamepadAimHeld, v54.gamepadFlyUp, v54.gamepadFlyDown = false, false, false
     enabled.SpinMode = false
     v54.flingAllToken += 1
