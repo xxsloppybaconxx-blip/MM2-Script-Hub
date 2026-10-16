@@ -47,6 +47,16 @@ end
 if type(environment.SpectraExtrasUnload) == "function" then
     pcall(environment.SpectraExtrasUnload)
 end
+-- An earlier core could fail after creating UI but before registering Unload.
+-- Remove only known SPECTRA leftovers so duplicate ESPs/launchers cannot
+-- keep rendering and multiplying frame cost across loader retries.
+for _, node in ipairs(playerGui:GetChildren()) do
+    if node.Name == "SpectraMM2Hub" or node.Name == "SpectraESPOverlay" then
+        pcall(function() node:Destroy() end)
+    end
+end
+local staleEffects = Workspace:FindFirstChild("SpectraMM2Effects")
+if staleEffects then pcall(function() staleEffects:Destroy() end) end
 
 local connections = {}
 local function watch(connection)
