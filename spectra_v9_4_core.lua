@@ -5438,6 +5438,13 @@ v54.catalogPreviewEntries = {
     {"R6", "R6 DANCE 3", 182436935},
     {"R6", "R6 LAUGH", 129423131},
     {"R6", "R6 CHEER", 129423030},
+    -- Additional built-in R6 transition clips (separate from looping tracks).
+    {"R6", "R6 IDLE 1 TRANSITION", 125750544},
+    {"R6", "R6 IDLE 2 TRANSITION", 125750618},
+    {"R6", "R6 WALK TRANSITION", 125749145},
+    {"R6", "R6 FALL TRANSITION", 125750759},
+    {"R6", "R6 CLIMB TRANSITION", 125750800},
+    {"R6", "R6 TOOL TRANSITION", 125750867},
     {"R15", "CLASSIC WAVE", 507770239},
     {"R15", "CLASSIC POINT", 507770453},
     {"R15", "CLASSIC DANCE 1", 507771019},
@@ -5459,7 +5466,7 @@ v54.catalogPreviewEntries = {
     {"R15", "R6 STYLE TWO HAND SWORD", 13978504790}
 }
 heading(pages["ANIMS"], "RIG-COMPATIBLE PREVIEW IDS")
-label(pages["ANIMS"], "Only previews for your current rig appear. Select a clip, then tap PREVIEW animation ID; Roblox may reject clips without permission.", 90,
+label(pages["ANIMS"], "Includes standard Roblox animations, catalog emotes, and extra R6 transitions. Only IDs matching your current rig appear; other creators\u0027 assets may still need permission.", 100,
     Color3.fromRGB(185,207,237), 12)
 for _, item in ipairs(v54.catalogPreviewEntries) do
     local rig, title, id = item[1], item[2], item[3]
