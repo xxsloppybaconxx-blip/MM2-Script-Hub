@@ -108,6 +108,7 @@ local enabled = {
     AutoAimMurderer = false,
     AutoShootMurderer = false,
     SilentAim = false,
+    AutoSilentShot = false,
     SheriffDpadFrontLock = true, -- Down runs front-lock test; toggle OFF for ordinary auto aim
     SheriffFrontMoveSelf = true, -- Place your character near the Murderer; don't fabricate target positions on your client
     SheriffRequireVisibleKnife = true, -- Normal sheriff auto aim/shoot only; NEVER gate front-stack
@@ -562,11 +563,11 @@ local tabButtons = {}
 local toggleUpdaters = {}
 v54.activeTab = "HOME"
 v54.gamepadMenuMode = false
-v54.tabOrder = { "HOME", "ESP", "MOVE", "TELEPORT", "FARM", "AIM", "FUN", "MURDER", "SHERIFF", "INNOCENT", "ANIMS", "SETTINGS", "STATUS" }
+v54.tabOrder = { "HOME", "ESP", "MOVE", "TELEPORT", "FARM", "FUN", "MURDER", "SHERIFF", "INNOCENT", "ANIMS", "SETTINGS", "STATUS" }
 -- One small section selector stays visible; only relevant tabs are shown.
 v54.navGroups = {
     {title = "GENERAL", tabs = {"HOME", "ESP", "MOVE", "TELEPORT"}},
-    {title = "GAMEPLAY", tabs = {"FARM", "AIM", "FUN"}},
+    {title = "GAMEPLAY", tabs = {"FARM", "FUN"}},
     {title = "ROLES", tabs = {"MURDER", "SHERIFF", "INNOCENT"}},
     {title = "OPTIONS", tabs = {"ANIMS", "SETTINGS", "STATUS"}},
 }
@@ -697,10 +698,11 @@ local visualsPage = makeTab("ESP")
 local movementPage = makeTab("MOVE")
 local toolsPage = makeTab("TELEPORT")
 local farmPage = makeTab("FARM")
-local aimPage = makeTab("AIM")
+-- All AIM controls now share the Sheriff page.
 local funPage = makeTab("FUN")
 v54.murderPage = makeTab("MURDER")
 v54.sheriffPage = makeTab("SHERIFF")
+local aimPage = v54.sheriffPage
 v54.innocentPage = makeTab("INNOCENT")
 makeTab("ANIMS")
 local settingsPage = makeTab("SETTINGS")
@@ -3013,11 +3015,13 @@ local function attemptMurdererShot(manual, headPriority)
         if manual then inform(shotNotice) end
         return
     end
-    local murderer = findConfirmedMurderer(v54.sheriffFrontShotActive)
+    local murderer = findConfirmedMurderer(v54.sheriffFrontShotActive
+        or enabled.SilentAim or enabled.AutoSilentShot)
     -- The optional Knife-visible gate applies to ordinary Sheriff aim/shoot.
     -- Front-stack invoked by D-pad Down (or its matching UI button) ignores it.
     if enabled.SheriffRequireVisibleKnife and not v54.sheriffFrontShotActive
-        and not enabled.SilentAim and not v54.isMurdererKnifeVisible(murderer) then
+        and not enabled.SilentAim and not enabled.AutoSilentShot
+        and not v54.isMurdererKnifeVisible(murderer) then
         shotNotice = "Waiting: confirmed Murderer must have a visibly equipped Knife"
         if manual then inform(shotNotice) end
         return
@@ -3037,6 +3041,7 @@ local function attemptMurdererShot(manual, headPriority)
     -- target is being placed in the player's front space, not the reticle.
     -- Keep world-position and unobstructed-shot checks; front mode bypasses Knife visibility.
     if not manual and enabled.AutoShootRadiusGate and not v54.sheriffFrontShotActive
+        and not enabled.SilentAim and not enabled.AutoSilentShot
         and not v54.withinScreenAimRadius(targetPart) then
         shotNotice = "Auto shoot waiting: Murderer outside visible aim circle"
         return
@@ -3061,10 +3066,12 @@ local function attemptMurdererShot(manual, headPriority)
     local myHead = myChar and myChar:FindFirstChild("Head")
     local firstPerson = camera and myHead
         and (camera.CFrame.Position - myHead.Position).Magnitude < 2.1
-    local lead = (v54.sheriffFrontShotActive or enabled.SilentAim) and 0
+    local lead = (v54.sheriffFrontShotActive or enabled.SilentAim
+        or enabled.AutoSilentShot) and 0
         or (firstPerson and 0.02 or 0.008)
     local position = targetPart.Position + targetPart.AssemblyLinearVelocity * lead
-    if v54.sheriffFrontShotActive and not enabled.SilentAim and camera then
+    if v54.sheriffFrontShotActive and not enabled.SilentAim
+        and not enabled.AutoSilentShot and camera then
         -- Avoid firing while the third-person camera is still catching up
         -- from a reposition, or while the weapon is being equipped.
         local toHead = position - camera.CFrame.Position
@@ -3907,7 +3914,7 @@ label(rolesPage, "Pick a section with ‹ / › above, or jump straight to a com
     45, Color3.fromRGB(194, 215, 239), 12)
 makeButton(rolesPage, "COIN FARM  →", function() v54.activateTab("FARM") end)
 makeButton(rolesPage, "PLAYER SELECTION / FUN  →", function() v54.activateTab("FUN") end)
-makeButton(rolesPage, "AIM & CONTROLLER  →", function() v54.activateTab("AIM") end)
+makeButton(rolesPage, "SHERIFF AIM & CONTROLLER  →", function() v54.activateTab("SHERIFF") end)
 makeButton(rolesPage, "SAVED SETTINGS  →", function() v54.activateTab("SETTINGS") end)
 makeButton(rolesPage, "CLEAR STUCK ROUND RESULT SCREEN", function() v54.manualClearRoundResults() end)
 heading(rolesPage, "ROLE RADAR  /  LIVE")
@@ -4334,8 +4341,22 @@ toggle(aimPage, "AUTO AIM • confirmed Murderer (visible radius)", "AutoAimMurd
     for _, refresh in ipairs(toggleUpdaters) do refresh() end
 end)
 toggle(aimPage, "AUTO SHOOT • confirmed Murderer (Gun only)", "AutoShootMurderer")
+toggle(aimPage, "AUTO SILENT SHOT • visible Murderer Head", "AutoSilentShot", function(on)
+    if on then
+        enabled.SilentAim = true
+        enabled.AutoShootMurderer = false
+        enabled.AutoAimMurderer = false
+        enabled.AimAssist = false
+        v54.silentAimBindGun()
+        v54.silentAimReport = "AUTO silent shot ON • requires clear line of sight"
+    else
+        v54.silentAimReport = "Auto Silent Shot OFF"
+    end
+    for _, refresh in ipairs(toggleUpdaters) do refresh() end
+    inform(v54.silentAimReport)
+end)
 heading(aimPage, "SILENT AIM • SHERIFF ONLY")
-label(aimPage, "When you fire your equipped Gun normally, request a supplementary head-target shot without turning the camera. It does not replace the game's own shot and cannot guarantee a hit.", 100,
+label(aimPage, "SILENT AIM requests head shots when you fire normally. AUTO SILENT SHOT also attempts a cooldown-limited shot automatically when the Sheriff has a clear line of sight to the Murderer. No camera turn. Server may reject hits.", 100,
     Color3.fromRGB(194, 219, 247), 12)
 toggle(aimPage, "SILENT AIM • head target when firing Gun", "SilentAim", function(on)
     if on then
@@ -4440,20 +4461,6 @@ heading(v54.sheriffPage, "SHERIFF / HERO • GUN")
 label(v54.sheriffPage, "Game-confirmed Sheriff/Hero only. Normal auto-aim/shoot can require a visible Knife (setting below). The separate front-lock mode ignores Knife visibility and uses world-space Head coordinates. Shots remain unverified.",
     90, Color3.fromRGB(208, 223, 248), 12)
 makeButton(v54.sheriffPage, "SHOOT CONFIRMED MURDERER NOW", function() attemptMurdererShot(true) end)
-heading(v54.sheriffPage, "SILENT AIM • SHERIFF")
-toggle(v54.sheriffPage, "SILENT AIM: Gun fire targets Murderer Head", "SilentAim", function(on)
-    if on then
-        enabled.AutoAimMurderer = false
-        enabled.AimAssist = false
-        enabled.AutoShootMurderer = false
-        v54.silentAimBindGun()
-        v54.silentAimReport = "ON • equip Gun as Sheriff, then fire"
-    else
-        v54.silentAimReport = "OFF"
-    end
-    for _, refresh in ipairs(toggleUpdaters) do refresh() end
-    inform(v54.silentAimReport)
-end)
 heading(v54.sheriffPage, "EXPERIMENTAL • FRONT HEADSHOT")
 label(v54.sheriffPage, "D-PAD DOWN / FRONT HEADSHOT: recommended mode positions YOUR Sheriff near the Murderer's actual location at configured gun range for 5.5s, locks the camera to their Head, and requests gun shots. The old visual-only target-moving mode remains optional. Server may reject movement or shots.",
     92, Color3.fromRGB(240, 204, 161), 12)
@@ -5203,7 +5210,7 @@ label(settingsPage, "Save preferences for next session. Uses executor readfile/w
 v54.settingsFile = "SPECTRA_MM2_settings_v5_9.json"
 v54.safeActive = {
     AutoCoinFarm = true, AutoGunPickup = true, AutoGunApproach = true,
-    AutoShootMurderer = true, SilentAim = true, MurderAura = true, MurderAuraApproach = true, FlingActive = true, Fly = true, SpinMode = true,
+    AutoShootMurderer = true, SilentAim = true, AutoSilentShot = true, MurderAura = true, MurderAuraApproach = true, FlingActive = true, Fly = true, SpinMode = true,
     CameraLock = true, Sprint = true, Noclip = true, AutoAimMurderer = true,
 }
 v54.settingsSnapshot = function()
@@ -5591,7 +5598,31 @@ end)
 task.spawn(function()
     while not destroyed do
         task.wait(0.28)
-        if enabled.AutoShootMurderer then attemptMurdererShot(false, true) end
+        if enabled.AutoShootMurderer and not enabled.AutoSilentShot then
+            attemptMurdererShot(false, true)
+        end
+        if enabled.AutoSilentShot then
+            local role, source = getRole(localPlayer)
+            if source == "game" and role == "Sheriff" and alive(localPlayer) then
+                local gun, equipped = findGun()
+                local murderer = findConfirmedMurderer(true)
+                local head = murderer and characterOf(murderer)
+                    and characterOf(murderer):FindFirstChild("Head")
+                local camera = Workspace.CurrentCamera
+                if gun and equipped and head and camera
+                    and hasWallClearance(camera, head) then
+                    -- Gun muzzle line of sight is checked inside the shot routine.
+                    attemptMurdererShot(false, true)
+                else
+                    v54.silentAimReport = not gun and "Auto waiting: equip Sheriff Gun"
+                        or not murderer and "Auto waiting: no visible Murderer"
+                        or not head and "Auto waiting: missing target Head"
+                        or "Auto waiting: target behind wall or Gun unequipped"
+                end
+            else
+                v54.silentAimReport = "Auto Silent Shot requires confirmed Sheriff"
+            end
+        end
     end
 end)
 -- Apply noclip before Roblox simulates collisions. Fallback for clients
@@ -5782,6 +5813,7 @@ local function unload()
     enabled.AutoShootMurderer = false
     enabled.AutoAimMurderer = false
     enabled.SilentAim = false
+    enabled.AutoSilentShot = false
     v54.gamepadAimHeld, v54.gamepadFlyUp, v54.gamepadFlyDown = false, false, false
     enabled.SpinMode = false
     v54.flingAllToken += 1
