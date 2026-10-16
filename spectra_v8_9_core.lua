@@ -3086,8 +3086,11 @@ v54.silentAimBindGun = function()
         end
         if os.clock() - v54.silentAimLast < 0.15 then return end
         v54.silentAimLast = os.clock()
-        v54.silentAimReport = "Head request attempted • server hit unverified"
+        local before = shotAttemptCount
         attemptMurdererShot(true, true)
+        v54.silentAimReport = shotAttemptCount > before
+            and "Head-target shot requested • hit not confirmed"
+            or ("No shot request • " .. shotNotice)
     end))
 end
 -- Role actions: request the experience's ordinary equipped Tool behavior.
@@ -4370,6 +4373,20 @@ heading(v54.sheriffPage, "SHERIFF / HERO • GUN")
 label(v54.sheriffPage, "Game-confirmed Sheriff/Hero only. Normal auto-aim/shoot can require a visible Knife (setting below). The separate front-lock mode ignores Knife visibility and uses world-space Head coordinates. Shots remain unverified.",
     90, Color3.fromRGB(208, 223, 248), 12)
 makeButton(v54.sheriffPage, "SHOOT CONFIRMED MURDERER NOW", function() attemptMurdererShot(true) end)
+heading(v54.sheriffPage, "SILENT AIM • SHERIFF")
+toggle(v54.sheriffPage, "SILENT AIM: Gun fire targets Murderer Head", "SilentAim", function(on)
+    if on then
+        enabled.AutoAimMurderer = false
+        enabled.AimAssist = false
+        enabled.AutoShootMurderer = false
+        v54.silentAimBindGun()
+        v54.silentAimReport = "ON • equip Gun as Sheriff, then fire"
+    else
+        v54.silentAimReport = "OFF"
+    end
+    for _, refresh in ipairs(toggleUpdaters) do refresh() end
+    inform(v54.silentAimReport)
+end)
 heading(v54.sheriffPage, "EXPERIMENTAL • FRONT HEADSHOT")
 label(v54.sheriffPage, "D-PAD DOWN / FRONT HEADSHOT: recommended mode positions YOUR Sheriff near the Murderer's actual location at configured gun range for 5.5s, locks the camera to their Head, and requests gun shots. The old visual-only target-moving mode remains optional. Server may reject movement or shots.",
     92, Color3.fromRGB(240, 204, 161), 12)
