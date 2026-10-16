@@ -1555,7 +1555,8 @@ v54.isRoundRewardText = function(value)
     local stripped = value:gsub("<[^>]+>", ""):gsub("%s+", "")
     local amount = stripped:match("^%+([%d,]+)$")
     if not amount then return false end
-    local numerical = tonumber(amount:gsub(",", ""))
+    local digits = (amount:gsub(",", ""))
+    local numerical = tonumber(digits)
     return numerical ~= nil and numerical >= 50
 end
 v54.rewardPanelFor = function(item)
