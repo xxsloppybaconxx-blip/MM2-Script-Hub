@@ -5107,174 +5107,129 @@ v54.restoreAnimationPack = function(quiet)
     v54.updatePackStatus(message)
     if not quiet then inform(message) end
 end
+-- Apply Animate IDs immediately. A previous 7-second batch of
+-- Animator:LoadAnimation probes often timed out and rejected the entire pack
+-- on mobile before any IDs could be installed.
 v54.applyAnimationPack = function(name, quiet)
     local pack = v54.animationPacks[name]
     if not pack then
-        if not quiet then inform("Animation pack not recognized: " .. tostring(name)) end
-        return
+        if not quiet then inform("Unknown animation pack: " .. tostring(name)) end
+        return false
     end
     v54.animationPackSequence += 1
-    local requestSequence = v54.animationPackSequence
-    v54.updatePackStatus("Checking " .. name .. " animations before editing your character...")
-    task.spawn(function()
-        local character = localPlayer.Character
-        if not character then
-            v54.updatePackStatus("No character to apply " .. name)
-            return
-        end
-        local hum = character:FindFirstChildOfClass("Humanoid")
-        local animate = character:FindFirstChild("Animate") or character:WaitForChild("Animate", 5)
-        local animator = hum and hum:FindFirstChildOfClass("Animator")
-        if not animate or not animator or not hum then
-            v54.updatePackStatus("Pack not applied: missing Humanoid / Animator / Animate")
-            return
-        end
-        local rig = v54.animationRigName()
-        if rig ~= pack.Rig then
-            v54.updatePackStatus(name .. " needs " .. pack.Rig .. ", current rig " .. rig)
-            return
-        end
-        -- Probe only Animate clip slots that exist for this rig.
-        -- Previously 15+ LoadAnimation calls started simultaneously, causing
-        -- multi-second frame stalls on lower-powered/mobile clients.
-        local approved, problems = {}, {}
-        local candidates = {}
-        for action, references in pairs(v54.packReferences) do
-            local id = v54.packAssetId(pack[action], 1)
-            if id then
-                for _, pair in ipairs(references) do
-                    local group = animate:FindFirstChild(pair[1])
-                    local clip = group and group:FindFirstChild(pair[2])
-                    if clip and clip:IsA("Animation") then
-                        table.insert(candidates, {action=action, id=id})
-                        break
-                    end
-                end
-            end
-        end
-        local priority = {Idle=1, Walk=2, Run=3, Jump=4, Fall=5, Climb=6, Swim=7}
-        table.sort(candidates, function(a,b)
-            return (priority[a.action] or 20) < (priority[b.action] or 20)
-        end)
-        v54.animationApprovalCache = v54.animationApprovalCache or {}
-        local active, completed = 0, 0
-        local maxConcurrent = 3
-        for _, entry in ipairs(candidates) do
-            while active >= maxConcurrent and requestSequence == v54.animationPackSequence
-                and not destroyed do
-                task.wait(0.08)
-            end
-            if requestSequence ~= v54.animationPackSequence or destroyed then return end
-            if v54.animationApprovalCache[entry.id] then
-                approved[entry.action] = true
-                completed += 1
-            else
-                active += 1
-                task.spawn(function()
-                    local ok, allowed = pcall(function()
-                        local probe = Instance.new("Animation")
-                        probe.AnimationId = entry.id
-                        local loaded, track = pcall(function()
-                            return animator:LoadAnimation(probe)
-                        end)
-                        local valid = false
-                        if loaded and track then
-                            local deadline = os.clock() + 1.7
-                            while track.Length <= 0 and os.clock() < deadline
-                                and requestSequence == v54.animationPackSequence and not destroyed do
-                                task.wait(0.12)
-                            end
-                            valid = track.Length > 0
-                            pcall(function() track:Destroy() end)
-                        end
-                        probe:Destroy()
-                        return valid
-                    end)
-                    approved[entry.action] = ok and allowed or false
-                    if approved[entry.action] then
-                        v54.animationApprovalCache[entry.id] = true
-                    end
-                    completed += 1
-                    active -= 1
-                end)
-            end
-        end
-        local deadline = os.clock() + 7
-        while completed < #candidates and os.clock() < deadline
-            and requestSequence == v54.animationPackSequence and not destroyed do
-            task.wait(0.1)
-        end
-        if requestSequence ~= v54.animationPackSequence or destroyed then return end
-        for _, action in ipairs({"Idle", "Walk", "Run"}) do
-            if pack[action] and not approved[action] then
-                table.insert(problems, action)
-            end
-        end
-        if #problems > 0 then
-            local message = name .. " NOT applied: unavailable " .. table.concat(problems, ", ")
-                .. ". Existing animations preserved."
-            v54.updatePackStatus(message)
-            if not quiet then inform(message) end
-            return
-        end
-        local original = v54.animationPackOriginals[character]
-        if not original then
-            original = {}
-            v54.animationPackOriginals[character] = original
-        end
-        local updated, skipped = 0, 0
-        for action, references in pairs(v54.packReferences) do
-            for _, pair in ipairs(references) do
-                local group = animate:FindFirstChild(pair[1])
-                local clip = group and group:FindFirstChild(pair[2])
-                if clip and clip:IsA("Animation") then
+    local sequence = v54.animationPackSequence
+    local character = localPlayer.Character
+    local hum = character and character:FindFirstChildOfClass("Humanoid")
+    local animate = character and character:FindFirstChild("Animate")
+    local animator = hum and hum:FindFirstChildOfClass("Animator")
+    if not character or not hum or not animate or not animator then
+        v54.updatePackStatus("Cannot apply pack: missing live Humanoid, Animator or Animate")
+        return false
+    end
+    local rig = v54.animationRigName()
+    if rig ~= pack.Rig then
+        v54.updatePackStatus("Wrong rig: " .. name .. " needs " .. pack.Rig
+            .. "; you're using " .. rig)
+        return false
+    end
+    v54.stopAnimationPreview()
+    local original = v54.animationPackOriginals[character]
+    if not original then
+        original = {}
+        v54.animationPackOriginals[character] = original
+    end
+    local updated, same, missing, errors = 0, 0, 0, 0
+    local oldLocomotion = {}
+    for action, references in pairs(v54.packReferences) do
+        for index, pair in ipairs(references) do
+            local folder = animate:FindFirstChild(pair[1])
+            local clip = folder and folder:FindFirstChild(pair[2])
+            if clip and clip:IsA("Animation") then
+                local desired = v54.packAssetId(pack[action], index)
+                if desired then
                     if original[clip] == nil then original[clip] = clip.AnimationId end
-                    -- Keep the original clip for any unavailable action.
-                    local chosenId = approved[action] and
-                        v54.packAssetId(pack[action], table.find(references, pair) or 1)
-                        or original[clip]
-                    if not approved[action] then skipped += 1 end
-                    local ok = pcall(function() clip.AnimationId = chosenId end)
-                    if ok then updated += 1 end
-                end
-            end
-        end
-        if requestSequence ~= v54.animationPackSequence or destroyed then return end
-        if updated > 0 then
-            v54.selectedAnimationPack = name
-            -- Stop only obsolete locomotion tracks. Do not interrupt tools,
-            -- emotes, or attack animation tracks unrelated to the old pack.
-            local obsolete = {}
-            for _, oldId in pairs(original) do obsolete[oldId] = true end
-            pcall(function()
-                for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-                    local anim = track.Animation
-                    if anim and obsolete[anim.AnimationId] then
-                        track:Stop(0.08)
+                    if clip.AnimationId == desired then
+                        same += 1
+                    else
+                        if action == "Walk" or action == "Run" or action == "Idle"
+                            or action == "Jump" or action == "Fall" then
+                            oldLocomotion[clip.AnimationId] = true
+                        end
+                        local ok = pcall(function() clip.AnimationId = desired end)
+                        if ok then updated += 1 else errors += 1 end
                     end
                 end
-            end)
-            v54.restartAnimate(character)
-            local message = name .. ": " .. updated .. " rig-compatible clips set; "
-                .. skipped .. " unavailable clips left unchanged. "
-                .. "If movement stays unchanged, MM2 may override Animate."
-            v54.updatePackStatus(message)
-            if not quiet then inform(message) end
-            task.delay(1.1, function()
-                if destroyed or requestSequence ~= v54.animationPackSequence
-                    or localPlayer.Character ~= character then return end
-                local currentWalk = animate:FindFirstChild("walk")
-                local walkAnim = currentWalk and currentWalk:FindFirstChild("WalkAnim")
-                local expected = v54.packAssetId(pack.Walk, 1)
-                if walkAnim and expected and walkAnim.AnimationId ~= expected then
-                    v54.updatePackStatus(name .. ": game replaced Walk animation. "
-                        .. "The current experience overrides local packs.")
-                end
-            end)
-        else
-            v54.updatePackStatus(name .. ": no matching Animate clips found")
+            else
+                missing += 1
+            end
+        end
+    end
+    if updated + same == 0 then
+        v54.updatePackStatus(name .. ": no compatible Animate clip slots found")
+        return false
+    end
+    v54.selectedAnimationPack = name
+    -- Prevent currently playing old locomotion tracks from masking new
+    -- animation IDs. Do not stop tool attacks or unrelated emotes.
+    pcall(function()
+        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+            local id = track.Animation and track.Animation.AnimationId
+            if id and oldLocomotion[id] then track:Stop(0.1) end
         end
     end)
+    v54.restartAnimate(character)
+    local message = name .. " / " .. rig .. ": " .. updated
+        .. " new clip IDs set; " .. same .. " already selected; "
+        .. errors .. " errors. Game may override animations."
+    v54.updatePackStatus(message)
+    if not quiet then inform(message) end
+    task.delay(1.5, function()
+        if destroyed or sequence ~= v54.animationPackSequence
+            or localPlayer.Character ~= character then return end
+        local changedBack, stillSet = 0, 0
+        for action, references in pairs(v54.packReferences) do
+            for index, pair in ipairs(references) do
+                local folder = animate:FindFirstChild(pair[1])
+                local clip = folder and folder:FindFirstChild(pair[2])
+                local desired = v54.packAssetId(pack[action], index)
+                if clip and clip:IsA("Animation") and desired then
+                    if clip.AnimationId == desired then
+                        stillSet += 1
+                    else
+                        changedBack += 1
+                    end
+                end
+            end
+        end
+        if changedBack > 0 then
+            v54.updatePackStatus(name .. ": " .. changedBack
+                .. " clip(s) changed by MM2's Animate system. "
+                .. "Local override may be unsupported in this round.")
+        else
+            v54.updatePackStatus(name .. ": " .. stillSet
+                .. " IDs remain installed. Use CHECK PLAYING CLIPS to see "
+                .. "which animations actually run.")
+        end
+    end)
+    return true
+end
+v54.reportPlayingAnimations = function()
+    local hum = humanOf(localPlayer)
+    local animator = hum and hum:FindFirstChildOfClass("Animator")
+    if not animator then return inform("No Animator on the current character") end
+    local output = {}
+    local tracks = animator:GetPlayingAnimationTracks()
+    for _, track in ipairs(tracks) do
+        local id = track.Animation and track.Animation.AnimationId or "unknown"
+        table.insert(output, tostring(id) .. " (" .. track.Priority.Name
+            .. ", " .. (track.IsPlaying and "playing" or "stopped") .. ")")
+        if #output >= 6 then break end
+    end
+    local message = #output > 0 and table.concat(output, " | ")
+        or "No animation tracks currently playing"
+    v54.updatePackStatus("Live tracks: " .. message)
+    inform("Live animation IDs printed to executor console")
+    print("[SPECTRA ANIMS] " .. message)
 end
 -- Emergency fallback if an older hub already replaced movement IDs without saving
 -- originals. Use the avatar's own description, never unknown copied bundle IDs.
@@ -5354,6 +5309,11 @@ for _, packName in ipairs({
         end)
 end
 v54.refreshAnimationRigButtons()
+makeButton(pages["ANIMS"], "CHECK PLAYING ANIMATIONS (actual IDs)", function()
+    v54.reportPlayingAnimations()
+end)
+label(pages["ANIMS"], "Pack IDs are applied immediately; the game may override them and some assets may require permission. An animation changes appearance, not the character's physical movement speed.", 95,
+    Color3.fromRGB(196,216,245), 12)
 makeButton(pages["ANIMS"], "EMERGENCY RESTORE original animations", function()
     v54.restoreAnimationPack(false)
 end)
