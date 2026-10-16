@@ -113,7 +113,7 @@ local enabled = {
     ControllerHoldAim = true,
     LocalGhost = false,
 }
-local numbers = { Speed = 24, Jump = 65, FlySpeed = 45, FOV = 70, ESPRange = 250, FarmRadius = 1000, FarmFlySpeed = 25, FarmTeleportDelay = 2.5, AimRadius = 210, AimSmooth = 0.54, FarmVisitCap = 40, KnifeAuraRadius = 12, SheriffFrontDistance = 14, SpinFlingSpeed = 1750, SpinFlingDuration = 2.1, Gravity = Workspace.Gravity }
+local numbers = { Speed = 24, Jump = 65, FlySpeed = 45, FOV = 70, ESPRange = 250, FarmRadius = 1000, FarmFlySpeed = 25, FarmTeleportDelay = 2.5, AimRadius = 210, AimSmooth = 0.54, FarmVisitCap = 40, KnifeAuraRadius = 12, SheriffFrontDistance = 14, SpinFlingSpeed = 2400, SpinFlingDuration = 2.25, Gravity = Workspace.Gravity }
 -- Save a copy of defaults before users customize settings.
 local playerEffects = {}
 local objectEffects = {}
@@ -1815,6 +1815,11 @@ local function applyCharacterSettings()
     end
 end
 watch(localPlayer.CharacterAdded:Connect(function(newCharacter)
+    -- Request fresh round role data promptly after respawning.
+    lastRoleFetch = -100
+    task.delay(0.2, function()
+        if not destroyed then refreshRoles() end
+    end)
     -- Include accessories and avatar parts added after initial character spawn.
     watch(newCharacter.DescendantAdded:Connect(function(part)
         if not destroyed and enabled.Noclip and part:IsA("BasePart") then
@@ -2367,6 +2372,7 @@ local function contactReport(player)
     return compatible > 0, message
 end
 
+-- Contact is a local physics experiment; outside-map launches are never guaranteed.
 -- SPECTRA 7.8: independently adapted from the *readable method* on the
 -- user-supplied Scribd fling.lua page. The page redacts many properties as
 -- [Link], so exact original source cannot be faithfully reproduced.
@@ -2409,6 +2415,8 @@ local function flingSelected(targetOverride, onFinished)
     restoreNoclip()
     enabled.FlingActive = true
     local activeFlingMode = v54.flingMode
+    local contactDuration = activeFlingMode == "spin"
+        and math.clamp(numbers.SpinFlingDuration, 0.8, 3.0) or 1.12
     flingNotice = string.format("%s • approaching %s (%.1f studs) • local contact",
         activeFlingMode, target.DisplayName, initialGap)
     if v54.flingFunLine and v54.flingFunLine.Parent then v54.flingFunLine.Text = flingNotice end
@@ -2432,8 +2440,9 @@ local function flingSelected(targetOverride, onFinished)
                 spinConstraint.Name = "SPECTRA_TemporarySpinDrive"
                 spinConstraint.Attachment0 = spinAttachment
                 spinConstraint.RelativeTo = Enum.ActuatorRelativeTo.World
-                spinConstraint.AngularVelocity = Vector3.new(0, 1750, 0)
-                spinConstraint.MaxTorque = 1e8
+                spinConstraint.AngularVelocity = Vector3.new(0,
+                    math.clamp(numbers.SpinFlingSpeed, 700, 3500), 0)
+                spinConstraint.MaxTorque = math.clamp(numbers.SpinFlingSpeed * 175000, 1e8, 6e8)
                 spinConstraint.Parent = own
             end
             local overlapParams = OverlapParams.new()
@@ -2445,7 +2454,7 @@ local function flingSelected(targetOverride, onFinished)
             -- When the client accepts these local CFrame changes, the gap
             -- should read ~1.5 studs, as it did in the reference monitor.
             while not destroyed and enabled.FlingActive and flingToken == token
-                and os.clock() - started < 1.12 do
+                and os.clock() - started < contactDuration do
                 local r, t = rootOf(localPlayer), rootOf(target)
                 if r ~= own or not t or not alive(target) then
                     reason = "own character or target disappeared"
@@ -2460,7 +2469,7 @@ local function flingSelected(targetOverride, onFinished)
                 else
                     consecutiveOutOfRange = 0
                 end
-                if consecutiveOutOfRange >= 10 then
+                if consecutiveOutOfRange >= (activeFlingMode == "spin" and 14 or 10) then
                     reason = "server or movement system repeatedly moved us away (>10 studs)"
                     break
                 end
@@ -2480,7 +2489,9 @@ local function flingSelected(targetOverride, onFinished)
                     0.55 * math.cos(phase * 0.73), math.cos(phase * 1.37))
                 if direction.Magnitude > 0 then
                     own.AssemblyLinearVelocity = direction.Unit
-                        * (activeFlingMode == "spin" and 850 or 2500)
+                        * (activeFlingMode == "spin"
+                            and math.clamp(numbers.SpinFlingSpeed * 0.6, 850, 2200)
+                            or 2500)
                     pulses += 1
                 end
                 if activeFlingMode ~= "spin" then
@@ -4392,6 +4403,10 @@ makeButton(funPage, "Diagnose selected player's collisions", function()
 end)
 label(funPage, "RESTORED v6.9 FLING • ~1.12 second per-frame 1.5 stud approach with 2,500 studs/s pulses. Fling Selected and Fling All use the exact same routine. 10 second delayed-launch monitor; LOCAL ONLY.",
     95, Color3.fromRGB(255, 207, 172), 12)
+label(funPage, "Spin is experimental. Longer contact can increase local overlap but cannot force server-owned players outside the map. Classic mode is unchanged.", 72,
+    Color3.fromRGB(194, 220, 241), 12)
+makeSlider(funPage, "SPIN ROTATION SPEED", "SpinFlingSpeed", 700, 3500, 100, " rad/s")
+makeSlider(funPage, "SPIN CONTACT DURATION", "SpinFlingDuration", 0.8, 3.0, 0.1, " s")
 v54.flingModeToggle = makeButton(funPage, "MODE: CLASSIC  •  tap for SPIN", function()
     if flingBusy or v54.flingAllActive then
         return inform("Stop current fling before switching modes")
