@@ -301,6 +301,7 @@ end
 local validRole = { Murderer=true, Sheriff=true, Innocent=true, Hero=true }
 v54.roleRefreshSeconds = 0.9 -- bounded polling, with event-triggered local role refresh
 v54.roleRemote = nil
+v54.roleRemoteNextSearch = -100
 v54.normalizeRole = function(value)
     if type(value) ~= "string" then return nil end
     local role = value:sub(1, 1):upper() .. value:sub(2):lower()
@@ -321,6 +322,12 @@ local function refreshRoles()
     task.spawn(function()
         local remote = v54.roleRemote
         if not remote or not remote.Parent then
+            if os.clock() < v54.roleRemoteNextSearch then
+                roleSyncMessage = "Waiting for MM2 role feed or replicated attributes"
+                roleFetchBusy = false
+                return
+            end
+            v54.roleRemoteNextSearch = os.clock() + 4
             remote = ReplicatedStorage:FindFirstChild("GetPlayerData", true)
             if remote and remote:IsA("RemoteFunction") then
                 v54.roleRemote = remote
@@ -395,6 +402,61 @@ local function getRole(player)
     end
     return "Unknown", "none", false
 end
+-- Attribute and tool signals react immediately to pickups/role changes,
+-- without making expensive RemoteFunction calls every render frame.
+v54.lastRoleSignalFetch = -100
+v54.seenRolePlayers = setmetatable({}, {__mode="k"})
+v54.seenRoleCharacters = setmetatable({}, {__mode="k"})
+v54.roleChangedSignal = function(player)
+    if destroyed then return end
+    v54.lastEspDataTick = -100
+    v54.lastRoleRadarTick = -100
+    if player == localPlayer and v54.updateSheriffCrosshair then
+        v54.updateSheriffCrosshair()
+    end
+    if os.clock() - v54.lastRoleSignalFetch >= 0.55 then
+        v54.lastRoleSignalFetch = os.clock()
+        lastRoleFetch = os.clock()
+        refreshRoles()
+    end
+end
+v54.observeRoleCharacter = function(player, character)
+    if not character or v54.seenRoleCharacters[character] then return end
+    v54.seenRoleCharacters[character] = true
+    for _, attribute in ipairs({"Role","CurrentRole"}) do
+        watch(character:GetAttributeChangedSignal(attribute):Connect(function()
+            v54.roleChangedSignal(player)
+        end))
+    end
+    watch(character.ChildAdded:Connect(function(child)
+        if child:IsA("Tool") then v54.roleChangedSignal(player) end
+    end))
+    watch(character.ChildRemoved:Connect(function(child)
+        if child:IsA("Tool") then v54.roleChangedSignal(player) end
+    end))
+end
+v54.observeRolePlayer = function(player)
+    if not player or v54.seenRolePlayers[player] then return end
+    v54.seenRolePlayers[player] = true
+    for _, attribute in ipairs({"Role","CurrentRole"}) do
+        watch(player:GetAttributeChangedSignal(attribute):Connect(function()
+            v54.roleChangedSignal(player)
+        end))
+    end
+    watch(player.CharacterAdded:Connect(function(char)
+        v54.observeRoleCharacter(player,char)
+        roleMap[player.Name] = nil -- old round roles are not current ones
+        v54.roleChangedSignal(player)
+    end))
+    v54.observeRoleCharacter(player,player.Character)
+end
+for _, player in ipairs(Players:GetPlayers()) do
+    v54.observeRolePlayer(player)
+end
+watch(Players.PlayerAdded:Connect(function(player)
+    v54.observeRolePlayer(player)
+    v54.roleChangedSignal(player)
+end))
 local function getRoleColor(role, source)
     if role == "Murderer" then return Color3.fromRGB(255, 86, 104) end
     if role == "Sheriff" then return Color3.fromRGB(83, 168, 255) end
@@ -4216,6 +4278,8 @@ makeButton(rolesPage, "Refresh MM2 role feed", function()
 end)
 toggle(rolesPage, "Notify when game roles change", "RoleAlerts")
 v54.roleDataLine = label(rolesPage, "Checking MM2 game role data...", 36, Color3.fromRGB(160, 205, 232), 12)
+v54.yourRoleLiveLabel = label(rolesPage, "YOU: checking live role...", 52,
+    Color3.fromRGB(200,235,252), 15)
 v54.roleDataLine.TextWrapped = true
 do
 heading(rolesPage, "SELECT PLAYER  /  AUTO-REFRESH")
@@ -4315,6 +4379,13 @@ makeButton(rolesPage, "Select sheriff (game data or tool hint)", function() sele
 makeButton(rolesPage, "Spectate selected player", spectate)
 makeButton(rolesPage, "Return to my character", restoreCamera)
 local function updateRoleRadar()
+    local yourRole, yourSource = getRole(localPlayer)
+    if v54.yourRoleLiveLabel and v54.yourRoleLiveLabel.Parent then
+        local _, armed = findGun()
+        v54.yourRoleLiveLabel.Text = "YOUR ROLE: " .. roleDisplay(yourRole,yourSource)
+            .. (armed and "  •  GUN EQUIPPED" or "")
+        v54.yourRoleLiveLabel.TextColor3 = getRoleColor(yourRole,yourSource)
+    end
     local murderer, sheriff, hero = "?", "?", "?"
     local known = 0
     for _, p in ipairs(Players:GetPlayers()) do
