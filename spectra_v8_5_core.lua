@@ -515,20 +515,20 @@ main.BackgroundTransparency = 1
 main.Position = UDim2.fromOffset(sidebarWidth + 16, 81)
 main.Size = UDim2.new(1, -sidebarWidth - 25, 1, -117)
 main.Parent = window
-v54.status = Instance.new("TextLabel")
-v54.status.BackgroundColor3 = Color3.fromRGB(28, 34, 45)
-v54.status.Position = UDim2.new(0, 9, 1, -31)
-v54.status.Size = UDim2.new(1, -18, 0, 25)
-v54.status.TextColor3 = Color3.fromRGB(205, 222, 245)
-v54.status.TextSize = 12
-v54.status.TextXAlignment = Enum.TextXAlignment.Left
-v54.status.Text = "  Ready  •  choose a section, then a tab"
-v54.status.TextTruncate = Enum.TextTruncate.AtEnd
-v54.status.Font = Enum.Font.GothamMedium
-v54.status.Parent = window
-round(v54.status, 7)
+local status = Instance.new("TextLabel")
+status.BackgroundColor3 = Color3.fromRGB(28, 34, 45)
+status.Position = UDim2.new(0, 9, 1, -31)
+status.Size = UDim2.new(1, -18, 0, 25)
+status.TextColor3 = Color3.fromRGB(205, 222, 245)
+status.TextSize = 12
+status.TextXAlignment = Enum.TextXAlignment.Left
+status.Text = "  Ready  •  choose a section, then a tab"
+status.TextTruncate = Enum.TextTruncate.AtEnd
+status.Font = Enum.Font.GothamMedium
+status.Parent = window
+round(status, 7)
 local function inform(message)
-    if not destroyed then v54.status.Text = "  " .. message end
+    if not destroyed then status.Text = "  " .. message end
 end
 local pages = {}
 local tabButtons = {}
@@ -1024,7 +1024,7 @@ local function setWindowOpen(open)
     window.Visible = open
     tabs.Visible = open
     main.Visible = open
-    v54.status.Visible = open
+    status.Visible = open
     launcher.Visible = not open
     if open then
         -- Don't leave a gamepad cursor pointing to a hidden launcher.
@@ -3126,9 +3126,9 @@ v54.killAll = function()
         for i, p in ipairs(roster) do
             if destroyed or v54.murderSequenceToken ~= token or not v54.confirmRole("Murderer") then break end
             if alive(p) then
-                local ok, v54.status = v54.attackWithKnife(p, true)
+                local ok, status = v54.attackWithKnife(p, true)
                 if ok then requests += 1 else denied += 1 end
-                v54.roleActionMessage(string.format("Kill All %d/%d: %s • %s", i, #roster, p.DisplayName, v54.status))
+                v54.roleActionMessage(string.format("Kill All %d/%d: %s • %s", i, #roster, p.DisplayName, status))
                 task.wait(0.65)
             end
         end
@@ -4143,7 +4143,7 @@ toggle(aimPage, "AUTO SHOOT • confirmed Murderer (Gun only)", "AutoShootMurder
 makeButton(aimPage, "SHOOT confirmed Murderer NOW (one attempt)", function()
     attemptMurdererShot(true)
 end)
-v54.shotInfoLabel = label(aimPage, "Gun v54.status: waiting", 72, Color3.fromRGB(189, 221, 255), 13)
+v54.shotInfoLabel = label(aimPage, "Gun status: waiting", 72, Color3.fromRGB(189, 221, 255), 13)
 
 toggle(aimPage, "Require clear line of sight", "AimWallCheck")
 label(aimPage, "Camera aim is for Sheriff. If the role feed is late, a real Gun tool provides a fallback; the hub labels that state as unverified. Confirmed Innocent/Murderer/Hero roles remain blocked.", 65,
@@ -4176,7 +4176,7 @@ toggle(aimPage, "SHERIFF: HOLD L2/LT to aim at Murderer", "ControllerHoldAim", f
     if not on then v54.gamepadAimHeld = false end
     v54.updateControllerStatus()
 end)
-v54.controllerStatusLabel = label(aimPage, "Controller v54.status: waiting", 90,
+v54.controllerStatusLabel = label(aimPage, "Controller status: waiting", 90,
     Color3.fromRGB(157, 213, 255), 13)
 v54.updateControllerStatus()
 -- Role-specific controls: local attempts only; not server-confirmed kills.
@@ -5161,7 +5161,7 @@ label(settingsPage, "Role radar reads game-reported data only when MM2 exposes i
 
 -- Diagnostics: these are capability/observation checks, not server guarantees.
 heading(diagnosticsPage, "LIVE STATUS & DIAGNOSTICS")
-label(diagnosticsPage, "Shows what is observable on this client. A green script v54.status does not verify MM2 rewards, remote attacks, or trading.", 78, Color3.fromRGB(215, 224, 242), 14)
+label(diagnosticsPage, "Shows what is observable on this client. A green script status does not verify MM2 rewards, remote attacks, or trading.", 78, Color3.fromRGB(215, 224, 242), 14)
 do
 v54.diagRole = label(diagnosticsPage, "Role data: checking...", 55, Color3.fromRGB(190, 214, 245), 14)
 v54.diagFarm = label(diagnosticsPage, "Farm: waiting", 66, Color3.fromRGB(190, 214, 245), 14)
@@ -5494,7 +5494,7 @@ v54.aimStepName = "Spectra_Aim_" .. tostring(localPlayer.UserId)
 RunService:BindToRenderStep(v54.aimStepName, Enum.RenderPriority.Camera.Value + 3, function()
     if destroyed or not (enabled.AimAssist or enabled.AutoAimMurderer or v54.sheriffFrontShotActive
         or (enabled.ControllerHoldAim and v54.gamepadAimHeld)) or enabled.CameraLock or spectateTarget then return end
-    -- The same permission gate is used for camera, D-pad Down and v54.status.
+    -- The same permission gate is used for camera, D-pad Down and status.
     -- Don't erase the physical held-trigger state when role data is late.
     if not v54.canUseSheriffControls() then return end
     local camera = Workspace.CurrentCamera
