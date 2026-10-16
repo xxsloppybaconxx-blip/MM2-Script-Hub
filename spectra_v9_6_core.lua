@@ -2615,8 +2615,16 @@ local function flingSelected(targetOverride, onFinished)
         return false
     end
     local canContact, collisionReport = contactReport(target)
-    -- Some games temporarily set CanCollide=false while players can still
-    -- overlap. Don't silently refuse to approach because of this local probe.
+    if not canContact then
+        -- A higher spin speed cannot create a contact impulse when the
+        -- target has no collidable surfaces. Keep this warning explicit.
+        flingNotice = "Collision blocker: " .. collisionReport
+            .. " • fling likely not effective in this round."
+        if v54.flingFunLine and v54.flingFunLine.Parent then
+            v54.flingFunLine.Text = flingNotice
+        end
+        inform(flingNotice)
+    end
     flingBusy = true
     flingToken += 1
     local token = flingToken
@@ -2647,8 +2655,9 @@ local function flingSelected(targetOverride, onFinished)
         or activeFlingMode == "launch" and math.clamp(numbers.LaunchDuration, 0.8, 2.5)
         or activeFlingMode == "touch" and math.clamp(numbers.TouchDuration, 0.6, 2.3)
         or 1.12
-    flingNotice = string.format("%s • approaching %s (%.1f studs) • local contact (server motion unverified)",
-        activeFlingMode, target.DisplayName, initialGap)
+    flingNotice = string.format("%s • @%s (%.0f studs) • local contact test (server unverified)%s",
+        activeFlingMode, target.Name, initialGap,
+        canContact and "" or " • COLLISION WARNING")
     if v54.flingFunLine and v54.flingFunLine.Parent then v54.flingFunLine.Text = flingNotice end
     inform(flingNotice)
     task.spawn(function()
@@ -2750,8 +2759,8 @@ local function flingSelected(targetOverride, onFinished)
                     or activeFlingMode == "launch" and launchCorrections < 4
                         and elapsed - lastLaunchPlacement >= 0.24
                         and (own.Position - intended).Magnitude > 2.2
-                    or activeFlingMode == "touch" and touchCorrections < 3
-                        and elapsed - lastTouchPlacement >= 0.32
+                    or activeFlingMode == "touch" and touchCorrections < 8
+                        and elapsed - lastTouchPlacement >= 0.21
                         and (own.Position - intended).Magnitude > 2.0 then
                     own.CFrame = activeFlingMode == "launch"
                         and CFrame.lookAt(intended, intended + launchAxis)
