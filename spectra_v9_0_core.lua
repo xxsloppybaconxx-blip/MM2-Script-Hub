@@ -4687,88 +4687,128 @@ do
 -- We edit the character's existing Animate Animation instances, rather than play seven
 -- movement tracks simultaneously. Missing/custom Animate hierarchies are skipped safely.
 v54.animationPacks = {
-    Ninja = {
-        Idle = "rbxassetid://658832408",
-        Walk = "rbxassetid://658831143",
-        Run = "rbxassetid://658830056",
-        Jump = "rbxassetid://658832070",
-        Fall = "rbxassetid://658831500",
-        Swim = "rbxassetid://658832807",
-        Climb = "rbxassetid://658833139",
+    ["R6 Free"] = {
+        Rig="R6", Idle={180435571,180435792}, Walk=180426354, Run=180426354,
+        Jump=125750702, Fall=180436148, Climb=180436334, Sit=178130996,
+        ToolHold=182393478, ToolSlash=129967390, ToolLunge=129967478,
+        Wave=128777973, Point=128853357, Dance1={182435998,182491037,182491065},
+        Dance2={182436842,182491248,182491277},
+        Dance3={182436935,182491368,182491423}, Laugh=129423131, Cheer=129423030
     },
-    Cartoony = {
-        Idle = "rbxassetid://837011741",
-        Walk = "rbxassetid://837010234",
-        Run = "rbxassetid://837009922",
-        Jump = "rbxassetid://837011171",
-        Fall = "rbxassetid://837010685",
-        Swim = "rbxassetid://837012509",
-        Climb = "rbxassetid://837013990",
+    ["R15 Classic"] = {
+        Rig="R15", Idle={507766666,507766951,507766388},
+        Walk=507777826, Run=507767714, Jump=507765000, Fall=507767968,
+        Swim=507784897, SwimIdle=507785072, Climb=507765644, Sit=507768133,
+        ToolHold=507768375, ToolSlash=522635514, ToolLunge=522638767,
+        Wave=507770239, Point=507770453,
+        Dance1={507771019,507771955,507772104},
+        Dance2={507776043,507776720,507776879},
+        Dance3={507777268,507777451,507777623},
+        Laugh=507770818, Cheer=507770677
     },
-    Levitation = {
-        Idle = "rbxassetid://619542203",
-        Walk = "rbxassetid://619544080",
-        Run = "rbxassetid://619543231",
-        Jump = "rbxassetid://619542888",
-        Fall = "rbxassetid://619541867",
-        Swim = "rbxassetid://619543721",
-        Climb = "rbxassetid://619541458",
+    ["R6 Style on R15"] = {
+        Rig="R15", Idle={12521158637,12521162526}, Walk=12518152696,
+        Run=12518152696, Jump=12520880485, Fall=12520972571,
+        Climb=12520982150, Sit=12520993168,
+        ToolHold=12520996634, ToolSlash=12520999032, ToolLunge=12521002003,
+        Wave=12521004586, Point=12521007694,
+        Dance1={12521009666,12521151637,12521015053},
+        Dance2={12521169800,12521173533,12521027874},
+        Dance3={12521178362,12521181508,12521184133},
+        Laugh=12521018724, Cheer=12521021991,
+        IdleOnce={13842624027,13842624352}, WalkOnce=13842624225,
+        FallOnce=13842624498, ClimbOnce=13842624634, ToolOnce=13842624036,
+        NinjaDash=13978512316, NinjaSlash=13978507503, DualSlash=13978510688,
+        SwordPump=13978511071, SwordSwingJump=13978511543,
+        SwordThrust=13978511983, TwoHandSword=13978504790
     },
-    Stylish = {
-        Idle = "rbxassetid://619511648",
-        Walk = "rbxassetid://619512767",
-        Run = "rbxassetid://619512153",
-        Jump = "rbxassetid://619511974",
-        Fall = "rbxassetid://619511417",
-        Swim = "rbxassetid://619512450",
-        Climb = "rbxassetid://619509955",
+    ["Rthro"] = {
+        Rig="R15", Idle={2510197257,2510196951,3711062489},
+        Walk=2510202577, Run=2510198475, Jump=2510197830, Fall=2510195892,
+        Swim=2510199791, SwimIdle=2510201162, Climb=2510192778
     },
-    Popstar = {
-        Idle = "rbxassetid://1212900985",
-        Walk = "rbxassetid://1212980338",
-        Run = "rbxassetid://1212980348",
-        Jump = "rbxassetid://1212954642",
-        Fall = "rbxassetid://1212900995",
-        Swim = "rbxassetid://1212852603",
-        Climb = "rbxassetid://1213044953",
+    ["Astronaut"] = {
+        Rig="R15", Idle={891621366,891633237,1047759695},
+        Walk=891636393, Run=891636393, Jump=891627522, Fall=891617961,
+        Swim=891639666, SwimIdle=891663592, Climb=891609353
     },
-    Patrol = {
-        Idle = "rbxassetid://1149612882",
-        Walk = "rbxassetid://1151231493",
-        Run = "rbxassetid://1150967949",
-        Jump = "rbxassetid://1150944216",
-        Fall = "rbxassetid://1148863382",
-        Swim = "rbxassetid://1151204998",
-        Climb = "rbxassetid://1148811837",
+    ["Bubbly"] = {
+        Rig="R15", Idle={910004836,910009958,1018536639},
+        Walk=910034870, Run=910025107, Jump=910016857, Fall=910001910,
+        Swim=910028158, SwimIdle=910030921, Climb=909997997
     },
-    Sneaky = {
-        Idle = "rbxassetid://1132473842",
-        Walk = "rbxassetid://1132510133",
-        Run = "rbxassetid://1132494274",
-        Jump = "rbxassetid://1132489853",
-        Fall = "rbxassetid://1132469004",
-        Swim = "rbxassetid://1132500520",
-        Climb = "rbxassetid://1132461372",
+    ["Cartoony"] = {
+        Rig="R15", Idle={742637544,742638445,885477856},
+        Walk=742640026, Run=742638842, Jump=742637942, Fall=742637151,
+        Swim=742639220, SwimIdle=742639812, Climb=742636889
     },
-    Princess = {
-        Idle = "rbxassetid://941003647",
-        Walk = "rbxassetid://941028902",
-        Run = "rbxassetid://941015281",
-        Jump = "rbxassetid://941008832",
-        Fall = "rbxassetid://941000007",
-        Swim = "rbxassetid://941018893",
-        Climb = "rbxassetid://940996062",
+    ["Elder"] = {
+        Rig="R15", Idle={845397899,845400520,901160519},
+        Walk=845403856, Run=845386501, Jump=845398858, Fall=845396048,
+        Swim=845401742, SwimIdle=845403127, Climb=845392038
     },
-    Zombie = {
-        Idle = "rbxassetid://616158929",
-        Walk = "rbxassetid://616168032",
-        Run = "rbxassetid://616163682",
-        Jump = "rbxassetid://616161997",
-        Fall = "rbxassetid://616156119",
-        Swim = "rbxassetid://616157476",
-        Climb = "rbxassetid://616160636",
+    ["Knight"] = {
+        Rig="R15", Idle={657595757,657568135,885499184},
+        Walk=657552124, Run=657564596, Jump=658409194, Fall=657600338,
+        Swim=657557095, SwimIdle=657558781, Climb=658360781
+    },
+    ["Levitation"] = {
+        Rig="R15", Idle={616006778,616008087,886862142},
+        Walk=616013216, Run=616010382, Jump=616008936, Fall=616005863,
+        Swim=616011509, SwimIdle=616012453, Climb=616003713
+    },
+    ["Mage"] = {
+        Rig="R15", Idle={707742142,707855907,885508740},
+        Walk=707897309, Run=707861613, Jump=707853694, Fall=707829716,
+        Swim=707876443, SwimIdle=707894699, Climb=707826056
+    },
+    ["Ninja"] = {
+        Rig="R15", Idle={656117400,656118341,886842569},
+        Walk=656121766, Run=656118852, Jump=656117878, Fall=656115533,
+        Swim=656119721, SwimIdle=656120116, Climb=656114359
+    },
+    ["Pirate"] = {
+        Rig="R15", Idle={750782770,750785176,885515365},
+        Walk=750785693, Run=750783738, Jump=750782230, Fall=750780242,
+        Swim=750784579, SwimIdle=750785176, Climb=750779899
+    },
+    ["Robot"] = {
+        Rig="R15", Idle={616088211,616089559,885531463},
+        Walk=616095330, Run=616091570, Jump=616086039, Fall=616087089,
+        Swim=616092998, SwimIdle=616094091, Climb=616086039
+    },
+    ["Stylish"] = {
+        Rig="R15", Idle={616136790,616138447,886888594},
+        Walk=616146177, Run=616140816, Jump=616139451, Fall=616134815,
+        Swim=616143378, SwimIdle=616144772, Climb=616133594
+    },
+    ["Superhero"] = {
+        Rig="R15", Idle={616111295,616113536,885535855},
+        Walk=616122287, Run=616117076, Jump=616115533, Fall=616108001,
+        Swim=616119360, SwimIdle=616120861, Climb=616104706
+    },
+    ["Toy"] = {
+        Rig="R15", Idle={782841498,782845736,980952228},
+        Walk=782843345, Run=782842708, Jump=782847020, Fall=782846423,
+        Swim=782844582, SwimIdle=782845186, Climb=782843869
+    },
+    ["Vampire"] = {
+        Rig="R15", Idle={1083445855,1083450166,1088037547},
+        Walk=1083473930, Run=1083462077, Jump=1083455352, Fall=1083443587,
+        Swim=1083464683, SwimIdle=1083467779, Climb=1083439238
+    },
+    ["Werewolf"] = {
+        Rig="R15", Idle={1083218792,1083214717,1099492820},
+        Walk=1083178339, Run=1083216690, Jump=1083218792, Fall=1083189019,
+        Swim=1083222527, SwimIdle=1083225406, Climb=1083182000
+    },
+    ["Zombie"] = {
+        Rig="R15", Idle={616158929,616160636,885545458},
+        Walk=616168032, Run=616163682, Jump=616161997, Fall=616157476,
+        Swim=616160636, SwimIdle=616168032, Climb=616156119
     },
 }
+
 v54.selectedAnimationPack = "Default"
 v54.lastSavedPack = "Default"
 v54.animationPackOriginals = setmetatable({}, {__mode = "k"})
@@ -4776,14 +4816,32 @@ v54.animationPackStatus = "Original character movement animations"
 v54.animationPackStatusLabel = nil
 v54.animationPackSequence = 0
 v54.packReferences = {
-    Idle = {{"idle", "Animation1"}, {"idle", "Animation2"}},
-    Walk = {{"walk", "WalkAnim"}},
-    Run = {{"run", "RunAnim"}},
-    Jump = {{"jump", "JumpAnim"}},
-    Fall = {{"fall", "FallAnim"}},
-    Swim = {{"swim", "Swim"}, {"swimidle", "SwimIdle"}},
-    Climb = {{"climb", "ClimbAnim"}},
+    Idle = {{"idle","Animation1"}, {"idle","Animation2"}, {"idle","Animation3"}},
+    Walk = {{"walk","WalkAnim"}}, Run = {{"run","RunAnim"}},
+    Jump = {{"jump","JumpAnim"}}, Fall = {{"fall","FallAnim"}},
+    Swim = {{"swim","Swim"}}, SwimIdle = {{"swimidle","SwimIdle"}},
+    Climb = {{"climb","ClimbAnim"}}, Sit = {{"sit","SitAnim"}},
+    ToolHold = {{"toolnone","ToolNoneAnim"}},
+    ToolSlash = {{"toolslash","ToolSlashAnim"}},
+    ToolLunge = {{"toollunge","ToolLungeAnim"}},
+    Wave = {{"wave","WaveAnim"}}, Point = {{"point","PointAnim"}},
+    Dance1 = {{"dance","Animation1"},{"dance","Animation2"},{"dance","Animation3"}},
+    Dance2 = {{"dance2","Animation1"},{"dance2","Animation2"},{"dance2","Animation3"}},
+    Dance3 = {{"dance3","Animation1"},{"dance3","Animation2"},{"dance3","Animation3"}},
+    Laugh = {{"laugh","LaughAnim"}}, Cheer = {{"cheer","CheerAnim"}}
 }
+v54.animationRigName = function()
+    local hum = humanOf(localPlayer)
+    if not hum then return "Loading" end
+    return hum.RigType == Enum.HumanoidRigType.R6 and "R6" or "R15"
+end
+v54.packAssetId = function(ids, index)
+    local id = type(ids) == "table" and ids[math.min(index or 1, #ids)] or ids
+    if type(id) ~= "number" and type(id) ~= "string" then return nil end
+    if tostring(id):match("^%d+$") then return "rbxassetid://" .. tostring(id) end
+    return id
+end
+
 v54.updatePackStatus = function(message)
     v54.animationPackStatus = message
     if v54.animationPackStatusLabel and v54.animationPackStatusLabel.Parent then
