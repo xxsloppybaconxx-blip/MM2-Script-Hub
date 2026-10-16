@@ -3326,7 +3326,9 @@ end
 -- client-side request intervals. Never present sent requests as confirmed hits.
 v54.sheriffShotCooldown = function()
     local role, source = getRole(localPlayer)
-    if enabled.SheriffRapidFire and source == "game" and role == "Sheriff" then
+    local gun = findGun()
+    if enabled.SheriffRapidFire and gun
+        and (role == "Sheriff" or role == "Hero") then
         return math.clamp(numbers.SheriffRapidInterval, 0.65, 2.5)
     end
     return 2.5
@@ -6203,11 +6205,13 @@ task.spawn(function()
             -- Completely independent of L2 and camera-lock controls.
             local role, source = getRole(localPlayer)
             local gun, equipped = findGun()
-            local roleAllowed = source == "game" and role == "Sheriff"
-                or source ~= "game" and role ~= "Murderer"
-                    and role ~= "Innocent" and role ~= "Hero" and gun ~= nil
+            -- MM2 Heroes collect the dropped Sheriff Gun. A stale Innocent
+            -- feed must not block automatic aiming while it is equipped.
+            local roleAllowed = gun ~= nil and alive(localPlayer)
+                and (role == "Sheriff" or role == "Hero"
+                    or role == "Innocent" or source ~= "game")
             if not alive(localPlayer) or not roleAllowed then
-                v54.silentAimReport = "Auto waiting: Sheriff role or unverified Gun tool"
+                v54.silentAimReport = "Auto waiting: living Sheriff/Hero with equipped Gun"
             elseif not gun then
                 v54.silentAimReport = "Auto waiting: Gun tool not found"
             else
