@@ -2474,7 +2474,7 @@ local function flingSelected(targetOverride, onFinished)
     local activeFlingMode = v54.flingMode
     local contactDuration = activeFlingMode == "spin"
         and math.clamp(numbers.SpinFlingDuration, 0.8, 3.0) or 1.12
-    flingNotice = string.format("%s • approaching %s (%.1f studs) • local contact",
+    flingNotice = string.format("%s • approaching %s (%.1f studs) • local contact (server motion unverified)",
         activeFlingMode, target.DisplayName, initialGap)
     if v54.flingFunLine and v54.flingFunLine.Parent then v54.flingFunLine.Text = flingNotice end
     inform(flingNotice)
@@ -2509,6 +2509,7 @@ local function flingSelected(targetOverride, onFinished)
             local started, lastUpdate, consecutiveOutOfRange = os.clock(), -1, 0
             local lastSpinPlacement = -100
             local spinCorrections = 0
+            local lastCollisionProbe = -100
             -- Position and apply impulses EVERY frame, not every 0.17 seconds.
             -- When the client accepts these local CFrame changes, the gap
             -- should read ~1.5 studs, as it did in the reference monitor.
@@ -2570,10 +2571,16 @@ local function flingSelected(targetOverride, onFinished)
                         900 * math.sin(phase), 2200 * math.cos(phase * 0.75),
                         900 * math.cos(phase))
                 end
-                if #Workspace:GetPartBoundsInBox(own.CFrame, own.Size, overlapParams) > 0 then
-                    overlaps += 1
+                -- Spatial queries are expensive on mobile. Sample overlap
+                -- at 10Hz instead of on every physics/render frame.
+                if elapsed - lastCollisionProbe >= 0.1 then
+                    lastCollisionProbe = elapsed
+                    local success, touching = pcall(function()
+                        return Workspace:GetPartBoundsInBox(own.CFrame, own.Size, overlapParams)
+                    end)
+                    if success and #touching > 0 then overlaps += 1 end
+                    contactFrames += 1
                 end
-                contactFrames += 1
                 peakOwn = math.max(peakOwn, own.AssemblyLinearVelocity.Magnitude)
                 peakSpin = math.max(peakSpin, own.AssemblyAngularVelocity.Magnitude)
                 peakTarget = math.max(peakTarget, t.AssemblyLinearVelocity.Magnitude)
@@ -5988,7 +5995,7 @@ watch(RunService.Heartbeat:Connect(function(delta)
             inform("Anti-void recovery attempted")
         end
     end
-    if now - lastVisualTick >= 0.5 then
+    if now - lastVisualTick >= 0.72 then
         lastVisualTick = now
         v54.refreshSliders()
         if now - lastRoleFetch >= v54.roleRefreshSeconds then
@@ -6067,7 +6074,7 @@ v54.espStepName = "SPECTRA_BoxesCombat_" .. tostring(localPlayer.UserId)
 v54.lastBoxFrame = -100
 RunService:BindToRenderStep(v54.espStepName, Enum.RenderPriority.Camera.Value + 5, function()
     if destroyed then return end
-    if os.clock() - v54.lastBoxFrame >= 0.065 then
+    if os.clock() - v54.lastBoxFrame >= 0.09 then
         v54.lastBoxFrame = os.clock()
         v54.update2DBoxes()
     end
