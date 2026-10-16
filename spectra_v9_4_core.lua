@@ -2475,6 +2475,38 @@ local function contactReport(player)
     return compatible > 0, message
 end
 
+-- Read-only physics analysis. GetNetworkOwner can be unavailable in some
+-- execution contexts, so treat every owner reading as a clue, not proof.
+v54.physicsDiagnostic = function(player)
+    if not player or player == localPlayer or player.Parent ~= Players then
+        return "Choose an active target first"
+    end
+    local mine, theirs = rootOf(localPlayer), rootOf(player)
+    if not mine or not theirs then return "Target or local character not spawned" end
+    local compatibility, contact = contactReport(player)
+    local distance = (mine.Position - theirs.Position).Magnitude
+    local ownerText = "unavailable on this client"
+    local ok, owner = pcall(function() return theirs:GetNetworkOwner() end)
+    if ok then
+        ownerText = owner and ("@" .. owner.Name) or "server/nil"
+    end
+    local ownOwnerText = "unavailable"
+    local okOwn, ownOwner = pcall(function() return mine:GetNetworkOwner() end)
+    if okOwn then ownOwnerText = ownOwner and ("@" .. ownOwner.Name) or "server/nil" end
+    local collisionText = compatibility and "collision groups overlap"
+        or "no compatible collidable body parts"
+    local reason = not compatibility and
+        "Physics push unlikely: target has no compatible collidable parts."
+        or ok and owner ~= localPlayer and
+        "Target assembly is not reported as locally owned. Server/another client may override any launch."
+        or "Local contact is possible; replication to other players still UNVERIFIED."
+    local report = string.format(
+        "@%s • gap %.1f studs • target owner %s • own owner %s • mass %.1f • anchored %s • %s. %s",
+        player.Name, distance, ownerText, ownOwnerText,
+        theirs.AssemblyMass, tostring(theirs.Anchored), collisionText, reason)
+    return report .. " [" .. contact .. "]"
+end
+
 -- Contact is a local physics experiment; outside-map launches are never guaranteed.
 -- SPECTRA 7.8: independently adapted from the *readable method* on the
 -- user-supplied Scribd fling.lua page. The page redacts many properties as
@@ -4803,17 +4835,21 @@ v54.refreshFunPicker = function()
 end
 v54.refreshFunPicker()
 end
+heading(funPage, "PHYSICS LIMITS & NETWORK OWNERSHIP")
+label(funPage, "Network ownership belongs to the server/assigned client. Your character's velocity cannot reliably force an opponent to move if their assembly is owned elsewhere or MM2 corrects the collision. Check the target diagnostics before testing another mode.", 116,
+    Color3.fromRGB(208,213,242), 12)
 heading(funPage, "PLAYER FLING • EXPERIMENTAL")
 label(funPage, "Choose a target above, without leaving FUN. This is a client-side physics test, not a guaranteed fling: if the server rejects the collision, other players will not move. STATUS shows locally observed motion.",
     94, Color3.fromRGB(207, 218, 237), 13)
 v54.flingFunLine = label(funPage, "Fling test: not started. Choose a player, then use Diagnose.",
     100, Color3.fromRGB(248, 207, 161), 13)
-makeButton(funPage, "Diagnose selected player's collisions", function()
+makeButton(funPage, "DIAGNOSE PHYSICS OWNER / COLLISIONS", function()
     if not selectedPlayer then return inform("Choose a player in FUN first") end
-    local canContact, report = contactReport(selectedPlayer)
-    flingNotice = report .. (canContact and " • possible contact" or " • no contact possible")
-    v54.flingFunLine.Text = flingNotice
-    inform(flingNotice)
+    local report = v54.physicsDiagnostic(selectedPlayer)
+    flingNotice = report
+    v54.flingFunLine.Text = report
+    inform(report)
+    print("[SPECTRA PHYSICS] " .. report)
 end)
 label(funPage, "RESTORED v6.9 FLING • ~1.12 second per-frame 1.5 stud approach with 2,500 studs/s pulses. Fling Selected and Fling All use the exact same routine. 10 second delayed-launch monitor; LOCAL ONLY.",
     95, Color3.fromRGB(255, 207, 172), 12)
