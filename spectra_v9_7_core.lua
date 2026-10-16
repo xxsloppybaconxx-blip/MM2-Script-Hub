@@ -130,7 +130,7 @@ local enabled = {
     ControllerHoldAim = true,
     LocalGhost = false,
 }
-local numbers = { Speed = 24, Jump = 65, FlySpeed = 45, FOV = 70, ESPRange = 250, FarmRadius = 1000, FarmFlySpeed = 25, FarmTeleportDelay = 2.5, AimRadius = 210, AimSmooth = 0.54, FarmVisitCap = 40, KnifeAuraRadius = 12, SheriffFrontDistance = 14, SpinFlingSpeed = 2400, SpinFlingDuration = 2.25, TouchSpinSpeed = 8000, TouchDuration = 1.55, LaunchSpeed = 480, LaunchDuration = 1.65, SheriffRapidInterval = 1.1, ShotLead = 0.055, CrosshairSize = 16, CrosshairOpacity = 0.96, Gravity = Workspace.Gravity }
+local numbers = { Speed = 24, Jump = 65, FlySpeed = 45, FOV = 70, ESPRange = 250, FarmRadius = 1000, FarmFlySpeed = 25, FarmTeleportDelay = 2.5, AimRadius = 210, AimSmooth = 0.54, FarmVisitCap = 40, KnifeAuraRadius = 12, SheriffFrontDistance = 14, SpinFlingSpeed = 2400, SpinFlingDuration = 2.25, TouchSpinSpeed = 8000, TouchDuration = 1.55, BillionDuration = 1.0, BillionSpeed = 2000000000, LaunchSpeed = 480, LaunchDuration = 1.65, SheriffRapidInterval = 1.1, ShotLead = 0.055, CrosshairSize = 16, CrosshairOpacity = 0.96, Gravity = Workspace.Gravity }
 -- Save a copy of defaults before users customize settings.
 local playerEffects = {}
 local objectEffects = {}
@@ -244,7 +244,7 @@ local lastShotAttempt = -100
 local shotInFlight = false
 local flingNotice = "Fling not tested in this session"
 -- The original v6.9-style method remains default. Only one fling engine runs.
-v54.flingMode = "classic" -- classic, spin, launch, or touch
+v54.flingMode = "billion" -- opt-in-capable billion-velocity contact / classic / spin / launch / touch
 v54.flingModeToggle = nil
 local lastRoleUI = 0
 local lightOriginal = {
@@ -2710,7 +2710,9 @@ local function flingSelected(targetOverride, onFinished)
     restoreNoclip()
     enabled.FlingActive = true
     local activeFlingMode = v54.flingMode
-    local contactDuration = activeFlingMode == "spin"
+    local contactDuration = activeFlingMode == "billion"
+        and math.clamp(numbers.BillionDuration, 0.5, 1.6)
+        or activeFlingMode == "spin"
         and math.clamp(numbers.SpinFlingDuration, 0.8, 3.0)
         or activeFlingMode == "launch" and math.clamp(numbers.LaunchDuration, 0.8, 2.5)
         or activeFlingMode == "touch" and math.clamp(numbers.TouchDuration, 0.6, 2.3)
@@ -2727,12 +2729,22 @@ local function flingSelected(targetOverride, onFinished)
         local followTravel, followSpeed, followSamples = 0, 0, 0
         local lowestTargetY = startingTarget.Y
         local reason = "contact window elapsed"
-        local spinAttachment, spinConstraint
+        local spinAttachment, spinConstraint, velocityDrive
         local touchMotor, touchPhysicsOriginal, touchMasslessOriginal
+        local spinCorrections = 0
         local success, failure = pcall(function()
             own.CanCollide = true
             humanoid.PlatformStand = true
             humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+            if activeFlingMode == "billion" then
+                -- High-energy finite velocities can replicate only if server physics accepts contact.
+                velocityDrive = Instance.new("BodyVelocity")
+                velocityDrive.Name = "SPECTRA_BillionContactDrive"
+                velocityDrive.MaxForce = Vector3.new(9e9,9e9,9e9)
+                velocityDrive.P = 9e9
+                velocityDrive.Velocity = Vector3.zero
+                velocityDrive.Parent = own
+            end
             if activeFlingMode == "touch" then
                 -- Adapted from Infinite Yield's public fling command:
                 -- a temporary BodyAngularVelocity on the local root.
@@ -2768,8 +2780,8 @@ local function flingSelected(targetOverride, onFinished)
             overlapParams.MaxParts = 12
             local started, lastUpdate, consecutiveOutOfRange = os.clock(), -1, 0
             local lastSpinPlacement = -100
-            local spinCorrections = 0
             local lastCollisionProbe = -100
+            local lastBillionPlacement, billionCorrections = -100, 0
             local launchCorrections, lastLaunchPlacement = 0, -100
             local touchCorrections, lastTouchPlacement = 0, -100
             local launchAxis = Vector3.new(startingTarget.X-origin.Position.X,0,
@@ -2804,7 +2816,9 @@ local function flingSelected(targetOverride, onFinished)
                 end
                 local height = math.floor(elapsed / 0.20) % 2 == 0 and 1.45 or -1.45
                 local offset = Vector3.new(0.28 * math.sin(phase), height, 0.28 * math.cos(phase))
-                local intended = activeFlingMode == "launch"
+                local intended = activeFlingMode == "billion"
+                    and t.Position + Vector3.new(0.35*math.sin(phase),0.2,0.35*math.cos(phase))
+                    or activeFlingMode == "launch"
                     and t.Position - launchAxis * 1.5 + Vector3.new(0,-0.45,0)
                     or activeFlingMode == "touch"
                         and t.Position + Vector3.new(0,0.2,0)
@@ -2821,6 +2835,9 @@ local function flingSelected(targetOverride, onFinished)
                         and (own.Position - intended).Magnitude > 2.2
                     or activeFlingMode == "touch" and touchCorrections < 8
                         and elapsed - lastTouchPlacement >= 0.21
+                        and (own.Position - intended).Magnitude > 2.0
+                    or activeFlingMode == "billion" and billionCorrections < 16
+                        and elapsed - lastBillionPlacement >= 0.085
                         and (own.Position - intended).Magnitude > 2.0 then
                     own.CFrame = activeFlingMode == "launch"
                         and CFrame.lookAt(intended, intended + launchAxis)
@@ -2835,6 +2852,9 @@ local function flingSelected(targetOverride, onFinished)
                     elseif activeFlingMode == "touch" then
                         lastTouchPlacement = elapsed
                         touchCorrections += 1
+                    elseif activeFlingMode == "billion" then
+                        lastBillionPlacement = elapsed
+                        billionCorrections += 1
                     end
                 end
                 local actualGap = (own.Position - t.Position).Magnitude
@@ -2843,23 +2863,32 @@ local function flingSelected(targetOverride, onFinished)
 
                 -- One bounded impulse per physics frame; the next frame
                 -- reestablishes contact instead of allowing prolonged drift.
-                local direction = activeFlingMode == "launch"
+                local direction = activeFlingMode == "billion"
+                    and Vector3.new(math.sin(phase*0.5),0.4,math.cos(phase*0.5))
+                    or activeFlingMode == "launch"
                     and (launchAxis + Vector3.new(0, 0.30, 0))
                     or Vector3.new(math.sin(phase * 1.13),
                         0.55 * math.cos(phase * 0.73), math.cos(phase * 1.37))
                 if direction.Magnitude > 0 and activeFlingMode ~= "touch" then
                     own.AssemblyLinearVelocity = direction.Unit *
-                        (activeFlingMode == "launch"
+                        (activeFlingMode == "billion"
+                            and math.clamp(numbers.BillionSpeed, 1e9, 9e9)
+                            or activeFlingMode == "launch"
                             and math.clamp(numbers.LaunchSpeed, 150, 800)
                             or activeFlingMode == "spin"
                                 and math.clamp(numbers.SpinFlingSpeed * 0.6, 850, 2200)
                             or 2500)
+                    if velocityDrive then
+                        velocityDrive.Velocity = own.AssemblyLinearVelocity
+                    end
                     pulses += 1
                 end
                 if activeFlingMode == "classic" then
                     own.AssemblyAngularVelocity = Vector3.new(
                         900 * math.sin(phase), 2200 * math.cos(phase * 0.75),
                         900 * math.cos(phase))
+                elseif activeFlingMode == "billion" then
+                    own.AssemblyAngularVelocity = Vector3.new(2e9,2e9,2e9)
                 elseif activeFlingMode == "touch" and touchMotor then
                     -- Infinite Yield alternates rotation and rest. Keep
                     -- each pulse time-limited to let physics resolve contact.
@@ -2900,7 +2929,7 @@ local function flingSelected(targetOverride, onFinished)
                     break
                 end
                 if activeFlingMode == "spin" or activeFlingMode == "launch"
-                    or activeFlingMode == "touch" then
+                    or activeFlingMode == "touch" or activeFlingMode == "billion" then
                     -- PreSimulation runs before the physics solver; allow
                     -- rotational contact to be processed without a CFrame
                     -- reset after each rendered frame.
@@ -2915,6 +2944,7 @@ local function flingSelected(targetOverride, onFinished)
         -- Remove the experimental constraint whether the attempt succeeds,
         -- is stopped, or throws. Classic never creates one.
         pcall(function()
+            if velocityDrive then velocityDrive:Destroy() end
             if spinConstraint then spinConstraint:Destroy() end
             if spinAttachment then spinAttachment:Destroy() end
             if touchMotor then touchMotor:Destroy() end
@@ -2950,7 +2980,8 @@ local function flingSelected(targetOverride, onFinished)
         if success and not destroyed and flingToken == token then
             local beginningFollow = os.clock()
             local followBaseline, lastTextAt = targetTravel, -1
-            while not destroyed and flingToken == token and os.clock() - beginningFollow < 10 do
+            local followSeconds = onFinished and 2 or 7
+            while not destroyed and flingToken == token and os.clock() - beginningFollow < followSeconds do
                 local t = rootOf(target)
                 if not t or not alive(target) then
                     reason = reason .. " • target despawned during follow-up"
@@ -2969,8 +3000,8 @@ local function flingSelected(targetOverride, onFinished)
                 if since - lastTextAt >= 1 then
                     lastTextAt = since
                     flingNotice = string.format(
-                        "Contact ended; tracking %s %.1f/10s: displacement %.0f, peak %.0f/s LOCAL",
-                        target.DisplayName, since, distance, followSpeed)
+                        "Contact ended; tracking %s %.1f/%.0fs: displacement %.0f, peak %.0f/s LOCAL",
+                        target.DisplayName, since, followSeconds, distance, followSpeed)
                     if v54.flingFunLine and v54.flingFunLine.Parent then
                         v54.flingFunLine.Text = flingNotice
                     end
@@ -5067,6 +5098,11 @@ label(funPage, "Spin now allows ~0.18s of physics contact between position corre
     Color3.fromRGB(194, 220, 241), 12)
 makeSlider(funPage, "SPIN ROTATION SPEED", "SpinFlingSpeed", 700, 3500, 100, " rad/s")
 makeSlider(funPage, "SPIN CONTACT DURATION", "SpinFlingDuration", 0.8, 3.0, 0.1, " s")
+heading(funPage, "BILLION-VELOCITY CONTACT • HIGH RISK")
+label(funPage, "High-energy fling sets temporary finite multi-billion assembly velocities and forces on YOUR character. May reset/kick you; target only moves if the server accepts the collision. No guaranteed hit.", 113,
+    Color3.fromRGB(255,181,150), 12)
+makeSlider(funPage, "BILLION VELOCITY", "BillionSpeed", 1000000000, 9000000000, 1000000000, " studs/s")
+makeSlider(funPage, "BILLION CONTACT DURATION", "BillionDuration", 0.5, 1.6, 0.1, " s")
 heading(funPage, "PHYSICAL CONTACT LAUNCH • NEW TEST")
 label(funPage, "LAUNCH tries pushing a selected player by moving your own character into contact and applying forward/upward velocity. It never directly writes the other player's CFrame. The server may ignore/correct the motion.", 105,
     Color3.fromRGB(188,220,248), 12)
@@ -5079,24 +5115,33 @@ makeSlider(funPage, "TOUCH SPIN SPEED", "TouchSpinSpeed", 1500, 30000, 500, " ra
 makeSlider(funPage, "TOUCH TEST DURATION", "TouchDuration", 0.6, 2.3, 0.1, " s")
 v54.refreshFlingModeText = function()
     if not v54.flingModeToggle then return end
-    v54.flingModeToggle.Text = v54.flingMode == "classic"
+    v54.flingModeToggle.Text = v54.flingMode == "billion"
+        and "MODE: BILLION • tap for CLASSIC"
+        or v54.flingMode == "classic"
         and "MODE: CLASSIC • tap for SPIN"
         or v54.flingMode == "spin" and "MODE: SPIN • tap for LAUNCH"
         or v54.flingMode == "launch" and "MODE: LAUNCH • tap for TOUCH"
         or "MODE: IY TOUCH • tap for CLASSIC"
 end
-v54.flingModeToggle = makeButton(funPage, "MODE: CLASSIC • tap for SPIN", function()
+v54.flingModeToggle = makeButton(funPage, "MODE: BILLION • tap for CLASSIC", function()
     if flingBusy or v54.flingAllActive then
         return inform("Stop current fling before switching modes")
     end
-    v54.flingMode = v54.flingMode == "classic" and "spin"
+    v54.flingMode = v54.flingMode == "billion" and "classic"
+        or v54.flingMode == "classic" and "spin"
         or v54.flingMode == "spin" and "launch"
-        or v54.flingMode == "launch" and "touch" or "classic"
+        or v54.flingMode == "launch" and "touch" or "billion"
     v54.refreshFlingModeText()
     inform("Contact mode: " .. v54.flingMode:upper()
         .. " • local movement is not proof of server displacement")
 end)
 v54.refreshFlingModeText()
+makeButton(funPage, "BILLION FLING SELECTED • EXPERIMENT", function()
+    if flingBusy or v54.flingAllActive then return inform("Stop the current fling first") end
+    v54.flingMode = "billion"
+    v54.refreshFlingModeText()
+    flingSelected()
+end)
 makeButton(funPage, "TOUCH FLING SELECTED • NEW TEST", function()
     if flingBusy or v54.flingAllActive then
         return inform("Stop the previous contact test before starting another")
