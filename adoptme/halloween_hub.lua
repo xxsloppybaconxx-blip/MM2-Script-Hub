@@ -12,7 +12,7 @@ end
 
 local config={
     mode="Hauntlet 2",
-    ghostESP=true,ghostMove=false,ghostFire=false,
+    ghostESP=true,ghostTP=false,ghostFire=false,
     doorESP=true,doorWalk=false,doorTP=false,safeOnly=false
 }
 local alive=true
@@ -27,6 +27,9 @@ local scanWhen=0
 local lastDoor,lastDoorAt=nil,-100
 local lastFire=0
 local lastMove=0
+local ghostLock=nil
+local ghostLockAt=0
+local ghostLastTP=nil
 local statusMessage="Starting..."
 local scanInfo="No scan yet"
 local viewVisible=true
@@ -100,27 +103,89 @@ local function doorForPart(part)
     end
     return nil
 end
+
+local function rejectedGhostName(name)
+    for _,noise in ipairs({
+        "frame","picture","painting","poster","canvas","portrait",
+        "gallery","interior","spawner","spawnpoint","spawn","manager",
+        "camera","effect","effectpart","emitter","particle","decal",
+        "decor","statue","blaster","vacuum","weapon","projectile",
+        "bullet","wall","floor","door","furniture","display",
+        "billboard","ui","indicator","button","tool","handle",
+        "shop","reward","icon","queue","lobby","trigger"
+    }) do
+        if has(name,noise) then return true end
+    end
+    return false
+end
+
+local function ghostEvidence(obj)
+    for _,key in ipairs({
+        "GhostCount","CapturedGhostCount","RemainingGhosts"
+    }) do
+        local count=attribute(obj,key)
+        if type(count)=="number" and count>0 then
+            return 90,"POSSESSED",Color3.fromRGB(255,185,86)
+        end
+    end
+    for _,key in ipairs({
+        "IsPossessed","Possessed","Haunted","IsHaunted",
+        "HasGhost","GhostInside","IsGhostTarget","ActiveGhost"
+    }) do
+        if attribute(obj,key)==true then
+            return 90,"POSSESSED",Color3.fromRGB(255,185,86)
+        end
+    end
+    for _,tag in ipairs({"Possessed","GhostTarget","Haunted","ActiveGhost"}) do
+        if tagged(obj,tag) then
+            return 90,"POSSESSED",Color3.fromRGB(255,185,86)
+        end
+    end
+    return nil
+end
+
+-- Do NOT select static pictures merely because their name contains "ghost".
+-- Select only active ghost actors, visible bosses, or explicitly possessed props.
 local function ghostForPart(part)
     if not alivePart(part) or ownPart(part) then return nil end
-    local inst=part
-    local match=nil
-    for depth=1,3 do
-        if not inst or inst==Workspace then break end
-        if (isGhostName(inst.Name) or tagged(inst,"Ghost") or tagged(inst,"Haunted")
-            or attribute(inst,"Haunted")==true or attribute(inst,"Possessed")==true
-            or attribute(inst,"HasGhost")==true) then
-            if not has(inst.Name,"gallery") and not has(inst.Name,"lobby")
-                and not has(inst.Name,"manager") and not has(inst.Name,"spawner") then
-                match=inst
+    local search=part
+    local candidate,anchor,score,label,color
+    for depth=1,5 do
+        if not search or search==Workspace then break end
+        if search:IsA("Model") or search:IsA("BasePart") then
+            local n=lower(search.Name)
+            local objPart=getPart(search)
+            if objPart and alivePart(objPart) then
+                -- Active boss names are often "Boss" without "ghost".
+                local looksBoss=(has(n,"boss") or has(n,"wraithking"))
+                    and not rejectedGhostName(n)
+                local looksSpirit=(has(n,"ghost") or has(n,"spirit")
+                    or has(n,"specter") or has(n,"phantom")
+                    or has(n,"poltergeist") or has(n,"wraith"))
+                    and not rejectedGhostName(n)
+                local level,kind,tint=ghostEvidence(search)
+                if looksBoss then
+                    level,kind,tint=300,"GHOST BOSS",Color3.fromRGB(222,104,251)
+                elseif looksSpirit then
+                    level,kind,tint=200,"VISIBLE GHOST",Color3.fromRGB(96,202,253)
+                end
+                if level and (not score or level>score) then
+                    candidate,anchor,score,label,color=
+                        search,objPart,level,kind,tint
+                end
             end
         end
-        inst=inst.Parent
+        -- Never promote a whole gallery room or decorative hierarchy to target.
+        if search:IsA("Model") and
+            (has(search.Name,"GalleryInterior") or has(search.Name,"ManorInterior")) then break end
+        search=search.Parent
     end
-    if match then
-        local p=getPart(match)
-        if p and clampedDistance(p)<=110 then return match,p end
+    if candidate and clampedDistance(anchor)<=125 then
+        return candidate,anchor,score,label,color
     end
+    return nil
 end
+
 local function signal(inst,part)
     local nodes={inst,part}
     local risk,name,color,safe=10,"UNKNOWN",Color3.fromRGB(250,204,91),false
@@ -247,8 +312,8 @@ local function label(y,height,contents,sz)
     l.Parent=panel
     return l
 end
-label(8,23,"Adopt Me Halloween Helper v3",16)
-label(31,28,"Actual Hauntlet DoorParts | unknown != safe",10)
+label(8,23,"Adopt Me Halloween Helper v4",16)
+label(31,28,"Ghost teleport + blaster | exact Hauntlet doors",10)
 local function button(y,caption,fn)
     local b=Instance.new("TextButton")
     b.Position=UDim2.fromOffset(12,y)
@@ -267,6 +332,7 @@ local function button(y,caption,fn)
     return b
 end
 local modeButton
+local debugButton
 local rows={}
 local function toggle(y,caption,key,mode)
     local b=button(y,"",function(self)
@@ -286,6 +352,10 @@ local function updateRows()
             or Color3.fromRGB(52,58,81)
     end
     modeButton.Text="Mode: "..config.mode.."  (tap to switch)"
+    if debugButton then
+        debugButton.Text=config.mode=="Ghost Gallery" and "Copy ghost debug"
+            or "Copy nearby door debug"
+    end
     clearMarks()
     scanWhen=0
 end
@@ -298,7 +368,7 @@ toggle(148,"Auto WALK to doors","doorWalk","Hauntlet 2")
 toggle(187,"Teleport near doors","doorTP","Hauntlet 2")
 toggle(226,"Confirmed safe only","safeOnly","Hauntlet 2")
 toggle(109,"Ghost ESP","ghostESP","Ghost Gallery")
-toggle(148,"Auto WALK to ghosts","ghostMove","Ghost Gallery")
+toggle(148,"Teleport to ghosts","ghostTP","Ghost Gallery")
 toggle(187,"Auto fire Ghost Blaster","ghostFire","Ghost Gallery")
 updateRows()
 local info=label(272,31,"Scanning nearby...",11)
@@ -355,7 +425,63 @@ local function diagnostic()
     end
 end
 
-button(345,"Copy nearby door debug",diagnostic)
+
+local function ghostDiagnostic()
+    local _,root=character()
+    if not root then statusMessage="No character";return end
+    local params=OverlapParams.new()
+    params.MaxParts=850
+    local ok,parts=pcall(function()
+        return Workspace:GetPartBoundsInRadius(root.Position,125,params)
+    end)
+    if not ok then statusMessage="Ghost debug unavailable";return end
+    local lines={
+        "Adopt Me Halloween Helper v4 Ghost Gallery diagnostic",
+        "Mode: "..config.mode,
+        "Nearby sample parts: "..#parts,
+        "Detected ghost targets: "..#scanned,
+        "Blaster input supported: "..tostring(
+            type(mouse1click)=="function"
+                or type(mouse1press)=="function"),
+        "Targets:"
+    }
+    for i=1,math.min(12,#scanned) do
+        local item=scanned[i]
+        lines[#lines+1]=i..". "..item.label.." | "
+            ..item.obj:GetFullName().." | dist="..math.floor(item.distance)
+    end
+    local samples={}
+    local dedup={}
+    for _,part in ipairs(parts) do
+        for _,obj in ipairs({part,part.Parent,part.Parent and part.Parent.Parent}) do
+            if obj and obj~=Workspace and not dedup[obj] and
+                (has(obj.Name,"ghost") or has(obj.Name,"spirit")
+                or has(obj.Name,"boss") or has(obj.Name,"haunt")
+                or has(obj.Name,"possess") or has(obj.Name,"blaster")) then
+                dedup[obj]=true
+                samples[#samples+1]=obj:GetFullName()
+                if #samples>=40 then break end
+            end
+        end
+        if #samples>=40 then break end
+    end
+    lines[#lines+1]="Candidate game object paths (first 40):"
+    for i,v in ipairs(samples) do lines[#lines+1]=i..". "..v end
+    if #samples==0 then lines[#lines+1]="No recognizable named objects in nearby sample." end
+    local output=table.concat(lines,"\n")
+    print(output)
+    if type(setclipboard)=="function" then
+        statusMessage=pcall(setclipboard,output)
+            and "Ghost debug copied; paste it into chat."
+            or "Ghost debug in developer console."
+    else
+        statusMessage="Ghost debug in developer console."
+    end
+end
+
+debugButton=button(345,"Copy nearby door debug",function()
+    if config.mode=="Hauntlet 2" then diagnostic() else ghostDiagnostic() end
+end)
 local function stop()
     if not alive then return end
     alive=false
@@ -441,32 +567,37 @@ local function scan()
         render(items)
         return
     end
-    -- Ghost Gallery remains a bounded, low-frequency spatial search.
     currentHauntletRoom=nil
     doorTravel=nil
+    -- One bounded spatial query rather than scanning every game instance.
     local params=OverlapParams.new()
-    params.MaxParts=500
+    params.MaxParts=850
     local ok,parts=pcall(function()
-        return Workspace:GetPartBoundsInRadius(root.Position,105,params)
+        return Workspace:GetPartBoundsInRadius(root.Position,125,params)
     end)
     if not ok then
-        scanned={};scanInfo="Spatial query not supported";clearMarks();return
+        scanned={};scanInfo="Ghost spatial query unavailable";clearMarks();return
     end
     local seen,found={},{}
     for _,part in ipairs(parts) do
-        local obj,anchor=ghostForPart(part)
-        if obj and alivePart(anchor) and not seen[obj] then
-            seen[obj]=true
-            found[#found+1]={
-                obj=obj,part=anchor,score=0,label="GHOST",
-                color=Color3.fromRGB(117,194,255),safe=true,
-                distance=clampedDistance(anchor)
-            }
+        local obj,anchor,priority,label,color=ghostForPart(part)
+        if obj and alivePart(anchor) then
+            -- Prefer actors over loose parts if parent and child both qualify.
+            local prev=seen[obj]
+            if not prev then
+                prev={obj=obj,part=anchor,score=priority,label=label,color=color,
+                    distance=clampedDistance(anchor)}
+                seen[obj]=prev
+                found[#found+1]=prev
+            end
         end
     end
-    table.sort(found,function(a,b) return a.distance<b.distance end)
+    table.sort(found,function(a,b)
+        if a.score~=b.score then return a.score>b.score end
+        return a.distance<b.distance
+    end)
     scanned=found
-    scanInfo=string.format("Ghost Gallery: %d targets / %d nearby parts",
+    scanInfo=string.format("Ghosts: %d verified-name/marker targets | %d parts checked",
         #found,#parts)
     render(found)
 end
@@ -501,6 +632,25 @@ local function activateDoor(obj,part)
     -- No simulated click or fabricated server event; walking through the door
     -- remains the fallback for games with touch-triggered entry.
     return "walking to door"
+end
+
+
+local function ghostTeleport(part)
+    local _,root=character()
+    if not root or not alivePart(part) then return false end
+    local target=part.Position
+    local delta=root.Position-target
+    local flat=Vector3.new(delta.X,0,delta.Z)
+    if flat.Magnitude<.25 then
+        local forward=part.CFrame.LookVector
+        flat=Vector3.new(forward.X,0,forward.Z)
+    end
+    if flat.Magnitude<.25 then flat=Vector3.new(0,0,1) end
+    local dest=target+flat.Unit*8
+    dest=Vector3.new(dest.X,target.Y+2.5,dest.Z)
+    return pcall(function()
+        root.CFrame=CFrame.lookAt(dest,target)
+    end)
 end
 
 local function horizontalDistance(a,b)
@@ -563,47 +713,79 @@ local function walkThroughDoor(item,now)
 end
 
 local function fireBlaster(point)
+    -- Adopt Me may implement Ghost Blaster through a custom input controller,
+    -- not a Roblox Tool. Try common client input APIs AND normal Tool:Activate.
     local c=player.Character
-    if not c then return false end
+    if not c then return false,"No character" end
+    local cam=Workspace.CurrentCamera
+    if cam then
+        pcall(function()
+            cam.CFrame=CFrame.lookAt(cam.CFrame.Position,point)
+        end)
+    end
     local tool
     for _,parent in ipairs({c,player:FindFirstChildOfClass("Backpack")}) do
         if parent then
             for _,t in ipairs(parent:GetChildren()) do
                 if t:IsA("Tool") and
-                    (has(t.Name,"blaster") or has(t.Name,"vacuum")) then
+                    (has(t.Name,"blaster") or has(t.Name,"vacuum")
+                     or has(t.Name,"ghost")) then
                     tool=t;break
                 end
             end
         end
         if tool then break end
     end
-    if not tool then return false end
-    if tool.Parent~=c then
-        local hum=c:FindFirstChildOfClass("Humanoid")
-        if hum then pcall(function()hum:EquipTool(tool)end)end
+    local success,methods=false,{}
+    if tool then
+        if tool.Parent~=c then
+            local hum=c:FindFirstChildOfClass("Humanoid")
+            if hum then pcall(function()hum:EquipTool(tool)end) end
+        end
+        if tool.Parent==c then
+            local ok=pcall(function()tool:Activate()end)
+            if ok then success=true;methods[#methods+1]="Tool activation" end
+        end
     end
-    if tool.Parent~=c then return false end
-    local cam=Workspace.CurrentCamera
-    if cam then pcall(function()
-        cam.CFrame=CFrame.lookAt(cam.CFrame.Position,point)
-    end)end
-    return pcall(function()tool:Activate()end)
+    if type(mouse1click)=="function" then
+        local ok=pcall(mouse1click)
+        if ok then success=true;methods[#methods+1]="mouse1click" end
+    elseif type(mouse1press)=="function" and type(mouse1release)=="function" then
+        local ok=pcall(function()
+            mouse1press()
+            task.delay(.08,function()pcall(mouse1release)end)
+        end)
+        if ok then success=true;methods[#methods+1]="mouse1press" end
+    else
+        local ok=pcall(function()
+            local vim=game:GetService("VirtualInputManager")
+            local size=cam and cam.ViewportSize or Vector2.new(900,650)
+            local x,y=math.floor(size.X/2),math.floor(size.Y/2)
+            vim:SendMouseButtonEvent(x,y,0,true,game,0)
+            task.delay(.08,function()
+                pcall(function()
+                    vim:SendMouseButtonEvent(x,y,0,false,game,0)
+                end)
+            end)
+        end)
+        if ok then success=true;methods[#methods+1]="VirtualInputManager" end
+    end
+    return success,success and table.concat(methods," + ") or "No supported firing API"
 end
+
 local function automate()
     local now=os.clock()
-    if #scanned==0 then
-        statusMessage="0 targets. Copy nearby door debug in Hauntlet."
-        return
-    end
     if config.mode=="Hauntlet 2" then
+        if #scanned==0 then
+            statusMessage="0 real doors. Copy Hauntlet debug in the event room."
+            return
+        end
         if not config.doorWalk then
             doorTravel=nil
             statusMessage="Door ESP detected "..#scanned.." real doors. Auto walk OFF."
             return
         end
         local choice
-        -- Keep the same active door during approach/cross so the bot
-        -- does not alternate between entrances every update.
         if doorTravel then
             for _,d in ipairs(scanned) do
                 if d.obj==doorTravel.obj then choice=d;break end
@@ -626,19 +808,53 @@ local function automate()
         if now-lastMove<0.65 then return end
         lastMove=now
         statusMessage=walkThroughDoor(choice,now)
-    else
-        local g=scanned[1]
-        if config.ghostMove and now-lastMove>1.5 then
+        return
+    end
+    if #scanned==0 then
+        ghostLock=nil
+        statusMessage="No visible ghost target. Use Copy ghost debug."
+        return
+    end
+    -- Keep each target for several shots, then cycle to a different one.
+    local foundLock=nil
+    for _,g in ipairs(scanned) do
+        if g.obj==ghostLock then foundLock=g;break end
+    end
+    local timeLimit=foundLock and foundLock.score>=300 and 7 or 3.7
+    if not foundLock or now-ghostLockAt>timeLimit then
+        local index=1
+        if foundLock and #scanned>1 then
+            for i,g in ipairs(scanned) do
+                if g.obj==ghostLock then index=i%#scanned+1;break end
+            end
+        end
+        foundLock=scanned[index]
+        ghostLock=foundLock.obj
+        ghostLockAt=now
+        ghostLastTP=nil
+    end
+    local target=foundLock.part
+    if not alivePart(target) then ghostLock=nil;return end
+    local _,root=character()
+    if config.ghostTP and root then
+        local d=(root.Position-target.Position).Magnitude
+        if (not ghostLastTP or ghostLastTP~=ghostLock or d>19)
+            and now-lastMove>=1.5 then
             lastMove=now
-            moveTo(g.part,false)
-            statusMessage="Walking toward "..g.obj.Name
+            local success=ghostTeleport(target)
+            ghostLastTP=success and ghostLock or nil
+            statusMessage=success and ("Teleported to "..foundLock.label)
+                or "Teleport unsuccessful"
         end
-        if config.ghostFire and now-lastFire>1.2 then
-            lastFire=now
-            local fired=fireBlaster(g.part.Position)
-            statusMessage=fired and "Blaster activated (capture not verified)"
-                or "No usable Ghost Blaster tool"
-        end
+    end
+    if config.ghostFire and now-lastFire>=.38 then
+        lastFire=now
+        local didFire,how=fireBlaster(target.Position)
+        statusMessage=didFire and ("Firing at "..foundLock.label.." via "..how)
+            or ("Cannot fire: "..how)
+        -- A simulated click does not prove the server accepted a hit.
+    elseif not config.ghostFire and not config.ghostTP then
+        statusMessage=#scanned.." targets found; teleport/fire OFF."
     end
 end
 
@@ -675,7 +891,7 @@ task.spawn(function()
         if now>=scanWhen then
             local ok,err=pcall(scan)
             if not ok then statusMessage="Scan error: "..tostring(err):sub(1,65) end
-            scanWhen=now+4.0
+            scanWhen=now+(config.mode=="Ghost Gallery" and 1.2 or 4)
         end
         local ok,err=pcall(automate)
         if not ok then statusMessage="Action error: "..tostring(err):sub(1,65) end
@@ -684,4 +900,4 @@ task.spawn(function()
         task.wait(.45)
     end
 end)
-print("[AdoptMe Halloween v3] Exact 1-3 DoorPart targeting enabled.")
+print("[AdoptMe Halloween v4] Ghost teleport, ghost-only ESP, multiple input fire attempts, and exact Hauntlet doors.")
