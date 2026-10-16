@@ -571,7 +571,7 @@ local function scan()
     doorTravel=nil
     -- One bounded spatial query rather than scanning every game instance.
     local params=OverlapParams.new()
-    params.MaxParts=850
+    params.MaxParts=650
     local ok,parts=pcall(function()
         return Workspace:GetPartBoundsInRadius(root.Position,125,params)
     end)
@@ -891,7 +891,7 @@ task.spawn(function()
         if now>=scanWhen then
             local ok,err=pcall(scan)
             if not ok then statusMessage="Scan error: "..tostring(err):sub(1,65) end
-            scanWhen=now+(config.mode=="Ghost Gallery" and 1.2 or 4)
+            scanWhen=now+(config.mode=="Ghost Gallery" and 1.8 or 4)
         end
         local ok,err=pcall(automate)
         if not ok then statusMessage="Action error: "..tostring(err):sub(1,65) end
