@@ -299,7 +299,7 @@ end
 
 -- Non-overlapping fast role feed: default 1.5s; no blind trust in hints.
 local validRole = { Murderer=true, Sheriff=true, Innocent=true, Hero=true }
-v54.roleRefreshSeconds = 1.5
+v54.roleRefreshSeconds = 0.9 -- bounded polling, with event-triggered local role refresh
 v54.roleRemote = nil
 v54.normalizeRole = function(value)
     if type(value) ~= "string" then return nil end
@@ -369,14 +369,30 @@ local function getRole(player)
     local rawAttribute = player:GetAttribute("Role") or player:GetAttribute("CurrentRole")
         or (char and (char:GetAttribute("Role") or char:GetAttribute("CurrentRole")))
     local attrRole = v54.normalizeRole(rawAttribute)
-    if attrRole then return attrRole, "game", false end
-    if os.clock() - roleLastUpdate <= 3.5 then
+    if attrRole then
+        -- Attributes occasionally lag a dropped-Gun pickup. Mark a temporary
+        -- Hero *hint* instead of falsely showing confirmed Innocent status.
+        if player == localPlayer and attrRole == "Innocent"
+            and visibleWeaponHint(player) == "Gun visible" then
+            return "Hero", "hint", false
+        end
+        return attrRole, "game", false
+    end
+    if os.clock() - roleLastUpdate <= 2.5 then
         local info = roleMap[player.Name]
-        if info then return info.role, "game", info.dead end
+        if info then
+            if player == localPlayer and info.role == "Innocent"
+                and visibleWeaponHint(player) == "Gun visible" then
+                return "Hero", "hint", false
+            end
+            return info.role, "game", info.dead
+        end
     end
     local hint = visibleWeaponHint(player)
     if hint == "Knife visible" then return "Murderer", "hint", false end
-    if hint == "Gun visible" then return "Sheriff", "hint", false end
+    if hint == "Gun visible" then
+        return player == localPlayer and "Hero" or "Sheriff", "hint", false
+    end
     return "Unknown", "none", false
 end
 local function getRoleColor(role, source)
@@ -3156,12 +3172,11 @@ end
 v54.updateSheriffCrosshair = function()
     if destroyed or not v54.sheriffCrosshair then return end
     local tool, equipped = findGun()
-    local role, source = getRole(localPlayer)
-    local allowed = source == "game" and role == "Sheriff"
-        or source ~= "game" and tool ~= nil
-            and role ~= "Murderer" and role ~= "Innocent" and role ~= "Hero"
+    -- Hero: an Innocent who picks up the dropped Gun is allowed to aim.
+    -- The equipped Tool is the immediate source of truth; the role remote
+    -- might still say Innocent for the first second after pickup.
     v54.sheriffCrosshair.Visible = enabled.ShowSheriffCrosshair
-        and equipped and allowed and alive(localPlayer) or false
+        and tool ~= nil and equipped and alive(localPlayer) or false
     if not v54.sheriffCrosshair.Visible then return end
     local length = math.clamp(numbers.CrosshairSize,8,36)
     local gap = math.max(5,math.floor(length*0.44))
