@@ -19,6 +19,9 @@ local alive=true
 local connections={}
 local manual={}
 local highlights={}
+local chosenDoorSlot=0
+local doorTravel=nil
+local currentHauntletRoom=nil
 local scanned={}
 local scanWhen=0
 local lastDoor,lastDoorAt=nil,-100
@@ -145,6 +148,60 @@ local function signal(inst,part)
     if has(n,"nightmare") then risk=65;name="RISK TYPE";color=Color3.fromRGB(255,145,80) end
     return risk,name,color,safe
 end
+
+-- Exact live structure confirmed by room diagnostics:
+-- Workspace.Interiors.HauntletInterior::<id>.Rooms.<room>.Doors.<1|2|3>.DoorPart
+-- Other door-* collections are decorative markers and MUST NOT be targeted.
+local function knownHauntletDoors()
+    local interiors=Workspace:FindFirstChild("Interiors")
+    if not interiors then return {},"Interiors missing",nil end
+    local best,bestRange=nil,math.huge
+    local sawInterior=false
+    for _,interior in ipairs(interiors:GetChildren()) do
+        if has(interior.Name,"HauntletInterior") then
+            sawInterior=true
+            local rooms=interior:FindFirstChild("Rooms")
+            if rooms then
+                for _,room in ipairs(rooms:GetChildren()) do
+                    local doors=room:FindFirstChild("Doors")
+                    if doors then
+                        local thisRoom={}
+                        local minDist=math.huge
+                        for _,slot in ipairs(doors:GetChildren()) do
+                            local number=tonumber(slot.Name)
+                            if number and number>=1 and number<=3 then
+                                local anchor=slot:FindFirstChild("DoorPart",true)
+                                if alivePart(anchor) then
+                                    local distance=clampedDistance(anchor)
+                                    if distance<140 then
+                                        minDist=math.min(minDist,distance)
+                                        local score,riskLabel,color,safe=signal(slot,anchor)
+                                        thisRoom[#thisRoom+1]={
+                                            obj=slot,part=anchor,slot=number,
+                                            room=room,score=score,label=riskLabel,
+                                            color=color,safe=safe,distance=distance
+                                        }
+                                    end
+                                end
+                            end
+                        end
+                        if #thisRoom>0 and minDist<bestRange then
+                            bestRange=minDist
+                            best={items=thisRoom,room=room}
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if best then
+        table.sort(best.items,function(a,b)return a.slot<b.slot end)
+        return best.items,"Detected room "..best.room.Name,best.room
+    end
+    if sawInterior then return {},"No live DoorPart slots nearby",nil end
+    return {},"Not in a Hauntlet interior",nil
+end
+
 local function clearMarks()
     for inst,marks in pairs(highlights) do
         pcall(function()marks.highlight:Destroy()end)
@@ -190,8 +247,8 @@ local function label(y,height,contents,sz)
     l.Parent=panel
     return l
 end
-label(8,23,"Adopt Me Halloween Helper v2",16)
-label(31,28,"Low-lag nearby scan | unknown doors are not safe",10)
+label(8,23,"Adopt Me Halloween Helper v3",16)
+label(31,28,"Actual Hauntlet DoorParts | unknown != safe",10)
 local function button(y,caption,fn)
     local b=Instance.new("TextButton")
     b.Position=UDim2.fromOffset(12,y)
@@ -259,70 +316,45 @@ local function aimTarget()
     local hit=Workspace:Raycast(ray.Origin,ray.Direction*250,rp)
     return hit and hit.Instance
 end
-button(308,"Mark door at screen CENTER",function()
-    local part=aimTarget()
-    if not part then statusMessage="Aim center at a door first";return end
-    local object,anchor=doorForPart(part)
-    if not object then object,anchor=part,part end
-    for _,existing in ipairs(manualTargets) do
-        if existing.obj==object then
-            statusMessage="Already marked: "..object.Name;return
-        end
-    end
-    manualTargets[#manualTargets+1]={obj=object,part=anchor}
-    if #manualTargets>6 then table.remove(manualTargets,1) end
-    statusMessage="Marked: "..object.Name.." ("..#manualTargets.." total)"
-    scanWhen=0
+button(308,"Door choice: AUTO (tap to change)",function(self)
+    chosenDoorSlot=(chosenDoorSlot+1)%4
+    self.Text="Door choice: "..(chosenDoorSlot==0 and "AUTO" or tostring(chosenDoorSlot))
+    doorTravel=nil
+    statusMessage="Selected door: "..(chosenDoorSlot==0 and "AUTO" or tostring(chosenDoorSlot))
 end)
 local function diagnostic()
     local _,root=character()
     if not root then statusMessage="No character; cannot scan";return end
-    local params=OverlapParams.new()
-    params.MaxParts=300
-    local ok,parts=pcall(function()
-        return Workspace:GetPartBoundsInRadius(root.Position,70,params)
-    end)
-    if not ok then statusMessage="Nearby scan unavailable";return end
-    local candidates={}
-    for _,p in ipairs(parts) do
-        if isDoorName(p.Name) or isDoorName(p.Parent.Name)
-            or p:FindFirstChildOfClass("ProximityPrompt") then
-            candidates[#candidates+1]=p
-        end
-    end
-    table.sort(candidates,function(a,b)
-        return (a.Position-root.Position).Magnitude<(b.Position-root.Position).Magnitude
-    end)
-    local lines={"Adopt Me Halloween Helper v2 diagnostic",
+    local doors,explanation,room=knownHauntletDoors()
+    local lines={
+        "Adopt Me Halloween Helper v3 diagnostic",
         "Mode: "..config.mode,
-        "Nearby parts sample: "..#parts,
-        "Possible doors/prompts: "..#candidates,
-        "Visible candidates:"}
-    for i=1,math.min(24,#candidates) do
-        local part=candidates[i]
-        lines[#lines+1]=string.format("%d. %.1f studs: %s [%s]",i,
-            (part.Position-root.Position).Magnitude,
-            part:GetFullName(),part.ClassName)
+        "Detected room: "..(room and room:GetFullName() or "(none)"),
+        "Door selection: "..(chosenDoorSlot==0 and "AUTO" or tostring(chosenDoorSlot)),
+        "Detection: "..explanation,
+        "Live door count: "..#doors
+    }
+    for _,d in ipairs(doors) do
+        local prompt=d.obj:FindFirstChildWhichIsA("ProximityPrompt",true)
+        lines[#lines+1]=string.format(
+            "DOOR %d | %.1f studs | %s | collision=%s | prompt=%s | risk=%s",
+            d.slot,d.distance,d.part:GetFullName(),tostring(d.part.CanCollide),
+            prompt and prompt:GetFullName() or "none",d.label)
     end
-    if #candidates==0 then
-        lines[#lines+1]="No recognizable doors. Closest generic part names:"
-        table.sort(parts,function(a,b)
-            return (a.Position-root.Position).Magnitude<(b.Position-root.Position).Magnitude
-        end)
-        for i=1,math.min(24,#parts) do
-            lines[#lines+1]=i..". "..parts[i]:GetFullName()
-        end
+    if #doors==0 then
+        lines[#lines+1]="No matching Rooms.<room>.Doors.<1-3>.DoorPart currently visible."
+        lines[#lines+1]="Try copying again after entering a Hauntlet room."
     end
     local output=table.concat(lines,"\n")
     print(output)
     if type(setclipboard)=="function" then
-        local copied=pcall(setclipboard,output)
-        statusMessage=copied and "Debug copied. Paste it into chat."
-            or "Debug printed in console (F9)."
+        statusMessage=pcall(setclipboard,output) and "Door debug copied."
+            or "Debug printed to console."
     else
-        statusMessage="Debug printed in console (F9)."
+        statusMessage="Door debug printed to console."
     end
 end
+
 button(345,"Copy nearby door debug",diagnostic)
 local function stop()
     if not alive then return end
@@ -348,7 +380,7 @@ local function render(items)
             if not pair then
                 local hl=Instance.new("Highlight")
                 hl.Name="HalloweenTarget"
-                hl.Adornee=item.obj
+                hl.Adornee=item.part
                 hl.DepthMode=Enum.HighlightDepthMode.AlwaysOnTop
                 hl.FillTransparency=0.78
                 hl.OutlineTransparency=0
@@ -372,11 +404,12 @@ local function render(items)
                 pair={highlight=hl,billboard=bb,text=t}
                 highlights[item.obj]=pair
             end
-            pair.highlight.Adornee=item.obj
+            pair.highlight.Adornee=item.part
             pair.highlight.OutlineColor=item.color
             pair.highlight.FillColor=item.color
             pair.billboard.Adornee=item.part
-            pair.text.Text=item.label.." | "..math.floor(item.distance).."m*"
+            pair.text.Text=(item.slot and ("DOOR "..item.slot.." ") or "")
+                ..item.label.." | "..math.floor(item.distance).." studs"
         end
     end
     for obj,pair in pairs(highlights) do
@@ -390,9 +423,29 @@ end
 -- No Workspace:GetDescendants() in any repeated loop: eliminates old FPS spike.
 local function scan()
     local _,root=character()
-    if not root then scanned={};scanInfo="No character";clearMarks();return end
+    if not root then
+        scanned={};scanInfo="No character";clearMarks()
+        currentHauntletRoom=nil
+        return
+    end
+    if config.mode=="Hauntlet 2" then
+        local items,explanation,room=knownHauntletDoors()
+        if currentHauntletRoom~=room then
+            currentHauntletRoom=room
+            doorTravel=nil
+            lastDoor=nil
+            lastDoorAt=-100
+        end
+        scanned=items
+        scanInfo=string.format("Hauntlet: %d real doors | %s",#items,explanation)
+        render(items)
+        return
+    end
+    -- Ghost Gallery remains a bounded, low-frequency spatial search.
+    currentHauntletRoom=nil
+    doorTravel=nil
     local params=OverlapParams.new()
-    params.MaxParts=700
+    params.MaxParts=500
     local ok,parts=pcall(function()
         return Workspace:GetPartBoundsInRadius(root.Position,105,params)
     end)
@@ -401,45 +454,23 @@ local function scan()
     end
     local seen,found={},{}
     for _,part in ipairs(parts) do
-        local obj,anchor
-        if config.mode=="Hauntlet 2" then
-            obj,anchor=doorForPart(part)
-        else
-            obj,anchor=ghostForPart(part)
-        end
+        local obj,anchor=ghostForPart(part)
         if obj and alivePart(anchor) and not seen[obj] then
             seen[obj]=true
-            local score,label,color,safe=0,"GHOST",Color3.fromRGB(117,194,255),true
-            if config.mode=="Hauntlet 2" then
-                score,label,color,safe=signal(obj,anchor)
-            end
-            found[#found+1]={obj=obj,part=anchor,score=score,
-                label=label,color=color,safe=safe,
-                distance=clampedDistance(anchor)}
+            found[#found+1]={
+                obj=obj,part=anchor,score=0,label="GHOST",
+                color=Color3.fromRGB(117,194,255),safe=true,
+                distance=clampedDistance(anchor)
+            }
         end
     end
-    if config.mode=="Hauntlet 2" then
-        for _,m in ipairs(manualTargets) do
-            if alivePart(m.part) and clampedDistance(m.part)<115 and not seen[m.obj] then
-                seen[m.obj]=true
-                local score,label,color,safe=signal(m.obj,m.part)
-                found[#found+1]={obj=m.obj,part=m.part,score=score,
-                    label="MARKED "..label,color=color,safe=safe,
-                    distance=clampedDistance(m.part)}
-            end
-        end
-    end
-    table.sort(found,function(a,b)
-        if config.mode=="Hauntlet 2" and a.score~=b.score then
-            return a.score<b.score
-        end
-        return a.distance<b.distance
-    end)
+    table.sort(found,function(a,b) return a.distance<b.distance end)
     scanned=found
-    scanInfo=string.format("%s: %d targets / %d nearby parts",
-        config.mode,#found,#parts)
+    scanInfo=string.format("Ghost Gallery: %d targets / %d nearby parts",
+        #found,#parts)
     render(found)
 end
+
 local function moveTo(part,tp)
     local _,root,hum=character()
     if not root or not hum or not alivePart(part) then return false end
@@ -471,6 +502,66 @@ local function activateDoor(obj,part)
     -- remains the fallback for games with touch-triggered entry.
     return "walking to door"
 end
+
+local function horizontalDistance(a,b)
+    return (Vector3.new(a.X,0,a.Z)-Vector3.new(b.X,0,b.Z)).Magnitude
+end
+-- Walk up to the player's side of the door, then attempt to cross it.
+-- MoveTo requests can still be blocked by the game's door collision/server.
+local function walkThroughDoor(item,now)
+    local _,root,hum=character()
+    if not root or not hum or not alivePart(item.part) then
+        return "No character or door part"
+    end
+    if not doorTravel or doorTravel.obj~=item.obj then
+        local part=item.part
+        local normal=part.CFrame.LookVector
+        local sign=(root.Position-part.Position):Dot(normal)>=0 and 1 or -1
+        local reach=math.max(3.2,math.min(7,part.Size.Z*0.5+2))
+        local approach=part.Position+normal*sign*reach
+        local through=part.Position-normal*sign*reach
+        -- Use character's floor height rather than a tall door mesh's Y center.
+        approach=Vector3.new(approach.X,root.Position.Y,approach.Z)
+        through=Vector3.new(through.X,root.Position.Y,through.Z)
+        doorTravel={
+            obj=item.obj,phase="approach",at=now,
+            front=approach,back=through,attempted=false,detail=""
+        }
+        if config.doorTP then
+            pcall(function()
+                root.CFrame=CFrame.new(approach,Vector3.new(
+                    part.Position.X,approach.Y,part.Position.Z))
+            end)
+        end
+    end
+    local job=doorTravel
+    if job.phase=="approach" then
+        hum:MoveTo(job.front)
+        if horizontalDistance(root.Position,job.front)<4.0
+           or horizontalDistance(root.Position,item.part.Position)<5.5
+           or now-job.at>6 then
+            job.phase="cross"
+            job.at=now
+        end
+    end
+    if job.phase=="cross" then
+        hum:MoveTo(job.back)
+        if not job.attempted and horizontalDistance(root.Position,item.part.Position)<12 then
+            job.detail=activateDoor(item.obj,item.part)
+            job.attempted=true
+        end
+        if now-job.at>6.5 then
+            lastDoor=item.obj
+            lastDoorAt=now
+            doorTravel=nil
+            return "Door "..tostring(item.slot)..": crossing attempted"
+        end
+        return "Door "..tostring(item.slot)..": moving through"
+            ..(job.attempted and " / "..job.detail or "")
+    end
+    return "Door "..tostring(item.slot)..": approaching entrance"
+end
+
 local function fireBlaster(point)
     local c=player.Character
     if not c then return false end
@@ -501,37 +592,40 @@ end
 local function automate()
     local now=os.clock()
     if #scanned==0 then
-        statusMessage="0 targets. Try Mark Door or Copy debug."
+        statusMessage="0 targets. Copy nearby door debug in Hauntlet."
         return
     end
     if config.mode=="Hauntlet 2" then
         if not config.doorWalk then
-            statusMessage="Door ESP running; auto walk OFF."
+            doorTravel=nil
+            statusMessage="Door ESP detected "..#scanned.." real doors. Auto walk OFF."
             return
         end
-        local pick
-        for _,d in ipairs(scanned) do
-            if d.score<100 and (not config.safeOnly or d.safe)
-                and (d.obj~=lastDoor or now-lastDoorAt>=12) then
-                pick=d;break
+        local choice
+        -- Keep the same active door during approach/cross so the bot
+        -- does not alternate between entrances every update.
+        if doorTravel then
+            for _,d in ipairs(scanned) do
+                if d.obj==doorTravel.obj then choice=d;break end
             end
         end
-        if not pick then
-            statusMessage=config.safeOnly and "No confirmed safe door exposed."
-                or "All candidates cooling down or danger-marked."
+        if not choice then
+            for _,d in ipairs(scanned) do
+                if d.score<100 and (not config.safeOnly or d.safe)
+                    and (chosenDoorSlot==0 or chosenDoorSlot==d.slot)
+                    and (d.obj~=lastDoor or now-lastDoorAt>12) then
+                    if not choice or d.distance<choice.distance then choice=d end
+                end
+            end
+        end
+        if not choice then
+            statusMessage=config.safeOnly and "No door with confirmed SAFE signal."
+                or "No selectable door right now."
             return
         end
-        if now-lastMove<1.8 then return end
+        if now-lastMove<0.65 then return end
         lastMove=now
-        local success=moveTo(pick.part,config.doorTP)
-        if success then
-            local label="walking to "..pick.obj.Name
-            if clampedDistance(pick.part)<12 then
-                label=label.." / "..activateDoor(pick.obj,pick.part)
-                lastDoor,lastDoorAt=pick.obj,now
-            end
-            statusMessage=label
-        else statusMessage="Cannot move: character/door missing" end
+        statusMessage=walkThroughDoor(choice,now)
     else
         local g=scanned[1]
         if config.ghostMove and now-lastMove>1.5 then
@@ -547,6 +641,7 @@ local function automate()
         end
     end
 end
+
 local moving=false
 local dragStart,oldPosition
 panel.InputBegan:Connect(function(i)
@@ -589,4 +684,4 @@ task.spawn(function()
         task.wait(.45)
     end
 end)
-print("[AdoptMe Halloween v2] Loaded. Door names unknown? Mark a door or copy diagnostics.")
+print("[AdoptMe Halloween v3] Exact 1-3 DoorPart targeting enabled.")
