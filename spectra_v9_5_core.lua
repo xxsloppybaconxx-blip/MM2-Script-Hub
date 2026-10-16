@@ -129,7 +129,7 @@ local enabled = {
     ControllerHoldAim = true,
     LocalGhost = false,
 }
-local numbers = { Speed = 24, Jump = 65, FlySpeed = 45, FOV = 70, ESPRange = 250, FarmRadius = 1000, FarmFlySpeed = 25, FarmTeleportDelay = 2.5, AimRadius = 210, AimSmooth = 0.54, FarmVisitCap = 40, KnifeAuraRadius = 12, SheriffFrontDistance = 14, SpinFlingSpeed = 2400, SpinFlingDuration = 2.25, LaunchSpeed = 480, LaunchDuration = 1.65, SheriffRapidInterval = 1.1, CrosshairSize = 16, CrosshairOpacity = 0.96, Gravity = Workspace.Gravity }
+local numbers = { Speed = 24, Jump = 65, FlySpeed = 45, FOV = 70, ESPRange = 250, FarmRadius = 1000, FarmFlySpeed = 25, FarmTeleportDelay = 2.5, AimRadius = 210, AimSmooth = 0.54, FarmVisitCap = 40, KnifeAuraRadius = 12, SheriffFrontDistance = 14, SpinFlingSpeed = 2400, SpinFlingDuration = 2.25, TouchSpinSpeed = 8000, TouchDuration = 1.55, LaunchSpeed = 480, LaunchDuration = 1.65, SheriffRapidInterval = 1.1, CrosshairSize = 16, CrosshairOpacity = 0.96, Gravity = Workspace.Gravity }
 -- Save a copy of defaults before users customize settings.
 local playerEffects = {}
 local objectEffects = {}
@@ -243,7 +243,7 @@ local lastShotAttempt = -100
 local shotInFlight = false
 local flingNotice = "Fling not tested in this session"
 -- The original v6.9-style method remains default. Only one fling engine runs.
-v54.flingMode = "classic" -- classic, spin, or launch
+v54.flingMode = "classic" -- classic, spin, launch, or touch
 v54.flingModeToggle = nil
 local lastRoleUI = 0
 local lightOriginal = {
@@ -2538,7 +2538,7 @@ local function flingSelected(targetOverride, onFinished)
     local origin = own.CFrame
     local startingTarget = theirRoot.Position
     local initialGap = (own.Position - theirRoot.Position).Magnitude
-    if v54.flingMode == "launch" and initialGap > 28 then
+    if (v54.flingMode == "launch" or v54.flingMode == "touch") and initialGap > 28 then
         inform("Launch test needs target within 28 studs; long jumps can trigger Invalid Location")
         return false
     end
@@ -2557,6 +2557,7 @@ local function flingSelected(targetOverride, onFinished)
     local contactDuration = activeFlingMode == "spin"
         and math.clamp(numbers.SpinFlingDuration, 0.8, 3.0)
         or activeFlingMode == "launch" and math.clamp(numbers.LaunchDuration, 0.8, 2.5)
+        or activeFlingMode == "touch" and math.clamp(numbers.TouchDuration, 0.6, 2.3)
         or 1.12
     flingNotice = string.format("%s • approaching %s (%.1f studs) • local contact (server motion unverified)",
         activeFlingMode, target.DisplayName, initialGap)
@@ -2570,10 +2571,27 @@ local function flingSelected(targetOverride, onFinished)
         local lowestTargetY = startingTarget.Y
         local reason = "contact window elapsed"
         local spinAttachment, spinConstraint
+        local touchMotor, touchPhysicsOriginal, touchMasslessOriginal
         local success, failure = pcall(function()
             own.CanCollide = true
             humanoid.PlatformStand = true
             humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+            if activeFlingMode == "touch" then
+                -- Adapted from Infinite Yield's public fling command:
+                -- a temporary BodyAngularVelocity on the local root.
+                -- Use bounded values and always restore physical properties.
+                touchPhysicsOriginal = own.CustomPhysicalProperties
+                touchMasslessOriginal = own.Massless
+                own.CustomPhysicalProperties = PhysicalProperties.new(100, 0.3, 0.5)
+                own.Massless = false
+                touchMotor = Instance.new("BodyAngularVelocity")
+                touchMotor.Name = "SPECTRA_TouchSpinTemporary"
+                touchMotor.MaxTorque = Vector3.new(0, 1e9, 0)
+                touchMotor.P = 1e9
+                touchMotor.AngularVelocity = Vector3.new(0,
+                    math.clamp(numbers.TouchSpinSpeed, 1500, 30000), 0)
+                touchMotor.Parent = own
+            end
             if activeFlingMode == "spin" then
                 spinAttachment = Instance.new("Attachment")
                 spinAttachment.Name = "SPECTRA_TemporarySpin"
@@ -2596,6 +2614,7 @@ local function flingSelected(targetOverride, onFinished)
             local spinCorrections = 0
             local lastCollisionProbe = -100
             local launchCorrections, lastLaunchPlacement = 0, -100
+            local touchCorrections, lastTouchPlacement = 0, -100
             local launchAxis = Vector3.new(startingTarget.X-origin.Position.X,0,
                 startingTarget.Z-origin.Position.Z)
             if launchAxis.Magnitude < 0.5 then
@@ -2630,6 +2649,8 @@ local function flingSelected(targetOverride, onFinished)
                 local offset = Vector3.new(0.28 * math.sin(phase), height, 0.28 * math.cos(phase))
                 local intended = activeFlingMode == "launch"
                     and t.Position - launchAxis * 1.5 + Vector3.new(0,-0.45,0)
+                    or activeFlingMode == "touch"
+                        and t.Position + Vector3.new(0,0.2,0)
                     or (t.Position + offset)
                 -- Classic retains its original per-frame positioning.
                 -- In Spin mode, do NOT teleport every physics frame: that
@@ -2640,7 +2661,10 @@ local function flingSelected(targetOverride, onFinished)
                         and (own.Position - intended).Magnitude > 2.1
                     or activeFlingMode == "launch" and launchCorrections < 4
                         and elapsed - lastLaunchPlacement >= 0.24
-                        and (own.Position - intended).Magnitude > 2.2 then
+                        and (own.Position - intended).Magnitude > 2.2
+                    or activeFlingMode == "touch" and touchCorrections < 3
+                        and elapsed - lastTouchPlacement >= 0.32
+                        and (own.Position - intended).Magnitude > 2.0 then
                     own.CFrame = activeFlingMode == "launch"
                         and CFrame.lookAt(intended, intended + launchAxis)
                         or CFrame.new(intended) * CFrame.Angles(0, phase * 1.8, 0)
@@ -2651,6 +2675,9 @@ local function flingSelected(targetOverride, onFinished)
                     elseif activeFlingMode == "launch" then
                         lastLaunchPlacement = elapsed
                         launchCorrections += 1
+                    elseif activeFlingMode == "touch" then
+                        lastTouchPlacement = elapsed
+                        touchCorrections += 1
                     end
                 end
                 local actualGap = (own.Position - t.Position).Magnitude
@@ -2663,7 +2690,7 @@ local function flingSelected(targetOverride, onFinished)
                     and (launchAxis + Vector3.new(0, 0.30, 0))
                     or Vector3.new(math.sin(phase * 1.13),
                         0.55 * math.cos(phase * 0.73), math.cos(phase * 1.37))
-                if direction.Magnitude > 0 then
+                if direction.Magnitude > 0 and activeFlingMode ~= "touch" then
                     own.AssemblyLinearVelocity = direction.Unit *
                         (activeFlingMode == "launch"
                             and math.clamp(numbers.LaunchSpeed, 150, 800)
@@ -2676,6 +2703,12 @@ local function flingSelected(targetOverride, onFinished)
                     own.AssemblyAngularVelocity = Vector3.new(
                         900 * math.sin(phase), 2200 * math.cos(phase * 0.75),
                         900 * math.cos(phase))
+                elseif activeFlingMode == "touch" and touchMotor then
+                    -- Infinite Yield alternates rotation and rest. Keep
+                    -- each pulse time-limited to let physics resolve contact.
+                    local engaged = (elapsed % 0.3) < 0.2
+                    touchMotor.AngularVelocity = Vector3.new(0,
+                        engaged and math.clamp(numbers.TouchSpinSpeed, 1500, 30000) or 0, 0)
                 elseif activeFlingMode == "launch" then
                     -- A forward-moving physical contact attempt, rather than
                     -- setting the selected player's character position.
@@ -2709,7 +2742,8 @@ local function flingSelected(targetOverride, onFinished)
                     reason = "own character fell or died"
                     break
                 end
-                if activeFlingMode == "spin" or activeFlingMode == "launch" then
+                if activeFlingMode == "spin" or activeFlingMode == "launch"
+                    or activeFlingMode == "touch" then
                     -- PreSimulation runs before the physics solver; allow
                     -- rotational contact to be processed without a CFrame
                     -- reset after each rendered frame.
@@ -2726,6 +2760,11 @@ local function flingSelected(targetOverride, onFinished)
         pcall(function()
             if spinConstraint then spinConstraint:Destroy() end
             if spinAttachment then spinAttachment:Destroy() end
+            if touchMotor then touchMotor:Destroy() end
+            if activeFlingMode == "touch" and own.Parent then
+                own.CustomPhysicalProperties = touchPhysicsOriginal
+                own.Massless = touchMasslessOriginal
+            end
         end)
         -- Always stop local physics and restore position before observing the target.
         pcall(function()
