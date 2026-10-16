@@ -2538,10 +2538,11 @@ local function flingSelected(targetOverride, onFinished)
     local origin = own.CFrame
     local startingTarget = theirRoot.Position
     local initialGap = (own.Position - theirRoot.Position).Magnitude
-    local contactStartLimit = v54.flingMode == "touch" and 15 or 28
-    if (v54.flingMode == "launch" or v54.flingMode == "touch")
-        and initialGap > contactStartLimit then
-        inform("Get within " .. contactStartLimit .. " studs for this contact test; longer jumps can trigger Invalid Location")
+    -- No fixed distance limit: the selected target must still be replicated.
+    -- MM2 can correct attempts to move our avatar across the map.
+    if not theirRoot:IsDescendantOf(Workspace) then
+        flingBusy = false
+        inform("Target character is not currently available in Workspace")
         return false
     end
     local oldPlatformStand, oldRootCollision = humanoid.PlatformStand, own.CanCollide
