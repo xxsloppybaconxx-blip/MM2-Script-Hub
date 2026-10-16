@@ -1286,6 +1286,27 @@ end
 -- Box ESP projects a BODY-ONLY bounding volume: tools and accessories
 -- are excluded so a holstered gun or oversized hat cannot stretch boxes.
 v54.box2DObjects = {}
+v54.boxBoundsCache = setmetatable({}, {__mode="k"})
+v54.getBodyBounds = function(char, root, now)
+    -- Cache approximate BODY-only bounds per character for 1.4s. This
+    -- avoids re-scanning each avatar's 15+ parts every render update.
+    local cached = v54.boxBoundsCache[char]
+    if cached and now - cached.at < 1.4 then return cached.low, cached.high end
+    local low, high = Vector3.new(-1.05,-2.95,-0.8), Vector3.new(1.05,2.95,0.8)
+    for _, part in ipairs(char:GetChildren()) do
+        if part:IsA("BasePart") and part ~= root then
+            local localPos = root.CFrame:PointToObjectSpace(part.Position)
+            local radius = part.Size * 0.5
+            local a, b = localPos-radius, localPos+radius
+            low = Vector3.new(math.min(low.X,a.X),math.min(low.Y,a.Y),math.min(low.Z,a.Z))
+            high = Vector3.new(math.max(high.X,b.X),math.max(high.Y,b.Y),math.max(high.Z,b.Z))
+        end
+    end
+    low = Vector3.new(math.clamp(low.X,-4,-0.4),math.clamp(low.Y,-8,-1.5),math.clamp(low.Z,-4,-0.35))
+    high = Vector3.new(math.clamp(high.X,0.4,4),math.clamp(high.Y,1.5,8),math.clamp(high.Z,0.35,4))
+    v54.boxBoundsCache[char] = {low=low,high=high,at=now}
+    return low,high
+end
 v54.clear2DBox = function(player)
     local box = v54.box2DObjects[player]
     if box then
@@ -1335,21 +1356,7 @@ v54.update2DBoxes = function()
             if eligible then
                 local rootPoint = cam:WorldToViewportPoint(root.Position)
                 if rootPoint.Z > 0.4 then
-                    local low = Vector3.new(-1.05, -2.95, -0.8)
-                    local high = Vector3.new(1.05, 2.95, 0.8)
-                    for _, part in ipairs(char:GetChildren()) do
-                        -- Avatar parts are direct children; Tool/Accessory
-                        -- geometry belongs to descendants and is ignored.
-                        if part:IsA("BasePart") and part ~= root then
-                            local localPos = root.CFrame:PointToObjectSpace(part.Position)
-                            local radius = part.Size * 0.5
-                            local a, b = localPos-radius, localPos+radius
-                            low = Vector3.new(math.min(low.X,a.X), math.min(low.Y,a.Y), math.min(low.Z,a.Z))
-                            high = Vector3.new(math.max(high.X,b.X), math.max(high.Y,b.Y), math.max(high.Z,b.Z))
-                        end
-                    end
-                    low = Vector3.new(math.clamp(low.X,-4,-0.4), math.clamp(low.Y,-8,-1.5), math.clamp(low.Z,-4,-0.35))
-                    high = Vector3.new(math.clamp(high.X,0.4,4), math.clamp(high.Y,1.5,8), math.clamp(high.Z,0.35,4))
+                    local low, high = v54.getBodyBounds(char,root,os.clock())
                     local left, top, right, bottom = math.huge, math.huge, -math.huge, -math.huge
                     local seen = 0
                     for _, x in ipairs({low.X,high.X}) do
@@ -6257,21 +6264,26 @@ watch(RunService.Heartbeat:Connect(function(delta)
             updateObjects()
         end
     end
+    -- Role feed / ESP refresh independently of the heavier settings UI.
+    if now - lastRoleFetch >= v54.roleRefreshSeconds then
+        lastRoleFetch = now
+        refreshRoles() -- asynchronous RemoteFunction call, never blocks heartbeat
+    end
+    if now - v54.lastRoleRadarTick >= 0.3 then
+        v54.lastRoleRadarTick = now
+        updateRoleRadar()
+    end
+    if now - v54.lastEspDataTick >= 0.32 then
+        v54.lastEspDataTick = now
+        updatePlayerEffects(now)
+        if enabled.Tracers then updateTracers() end
+    end
     if now - lastVisualTick >= 0.72 then
         lastVisualTick = now
         v54.refreshSliders()
-        if now - lastRoleFetch >= v54.roleRefreshSeconds then
-            lastRoleFetch = now
-            refreshRoles()
-        end
-        if now - lastRoleUI >= 0.45 then
-            lastRoleUI = now
-            updateRoleRadar()
-        end
         v54.updateAimRing()
         v54.updateControllerStatus()
-        updatePlayerEffects(now)
-        updateTracers()
+        if not enabled.Tracers then updateTracers() end
         -- Marker distances refresh independently at 4Hz, below.
         -- Update already-enabled settings in case of respawn/map changes.
         if enabled.Fullbright then v54.setFullbright(true) end
@@ -6334,9 +6346,11 @@ RunService:BindToRenderStep(v54.aimStepName, Enum.RenderPriority.Camera.Value + 
 end)
 v54.espStepName = "SPECTRA_BoxesCombat_" .. tostring(localPlayer.UserId)
 v54.lastBoxFrame = -100
+v54.lastEspDataTick = -100
+v54.lastRoleRadarTick = -100
 RunService:BindToRenderStep(v54.espStepName, Enum.RenderPriority.Camera.Value + 5, function()
     if destroyed then return end
-    if os.clock() - v54.lastBoxFrame >= 0.09 then
+    if os.clock() - v54.lastBoxFrame >= 0.105 then
         v54.lastBoxFrame = os.clock()
         v54.update2DBoxes()
         v54.updateSheriffCrosshair()
