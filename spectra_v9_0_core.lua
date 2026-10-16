@@ -112,6 +112,7 @@ local enabled = {
     SheriffFrontMoveSelf = true, -- Place your character near the Murderer; don't fabricate target positions on your client
     SheriffRequireVisibleKnife = true, -- Normal sheriff auto aim/shoot only; NEVER gate front-stack
     MurderAura = false,
+    MurderAuraApproach = false, -- opt-in limited approach; off by default to avoid Invalid Location
     ControllerHoldAim = true,
     LocalGhost = false,
 }
@@ -3120,7 +3121,10 @@ v54.roleActionMessage = function(message)
 end
 v54.confirmRole = function(required)
     local role, source, dead = getRole(localPlayer)
-    if dead or not alive(localPlayer) then return false, role, source end
+    if not alive(localPlayer) then return false, role, source end
+    -- Role feed's Dead flag can be stale after the character has respawned.
+    -- Always trust living Humanoid and current role/tool evidence over stale
+    -- dead flags when deciding to run the local aura test.
     if role == required and source == "game" then return true, role, source end
     if required == "Murderer" then
         -- Tool evidence is weaker than the MM2 role feed, but avoids a fully
@@ -3476,7 +3480,7 @@ task.spawn(function()
         if enabled.MurderAura and not v54.murderSequenceBusy then
             if not v54.confirmRole("Murderer") then
                 enabled.MurderAura = false
-                v54.roleActionMessage("Aura disabled: role no longer confirmed")
+                v54.roleActionMessage("Aura paused: no living Murderer/Knife evidence")
                 for _, update in ipairs(toggleUpdaters) do update() end
             elseif os.clock() - v54.murderAuraLast >= 0.5 then
                 v54.murderAuraLast = os.clock()
@@ -3492,8 +3496,23 @@ task.spawn(function()
                     end
                 end
                 if candidate then
-                    local ok, detail = v54.attackWithKnife(candidate, false)
-                    v54.roleActionStatus = "Aura: " .. candidate.DisplayName .. " • " .. detail
+                    local actualReach = math.min(5.3, numbers.KnifeAuraRadius)
+                    local moveCloser = enabled.MurderAuraApproach
+                        and gap > actualReach and gap <= 14
+                    if gap <= actualReach or moveCloser then
+                        local ok, detail = v54.attackWithKnife(candidate, moveCloser)
+                        v54.roleActionStatus = "Aura " .. candidate.DisplayName
+                            .. string.format(" (%.1f studs): ", gap) .. detail
+                    else
+                        -- A detection radius larger than knife reach does
+                        -- not imply an actual hit; don't spam impossible shots.
+                        v54.roleActionStatus = "Aura sees " .. candidate.DisplayName
+                            .. string.format(" at %.1f studs; contact needs %.1f", gap, actualReach)
+                    end
+                    if v54.roleActionLabel then v54.roleActionLabel.Text = v54.roleActionStatus end
+                else
+                    v54.roleActionStatus = "Aura scanning • no living players inside "
+                        .. tostring(numbers.KnifeAuraRadius) .. " studs"
                     if v54.roleActionLabel then v54.roleActionLabel.Text = v54.roleActionStatus end
                 end
             end
@@ -3782,7 +3801,7 @@ v54.combatRing.Name = "KnifeAuraRadiusPreview"
 v54.combatRing.AnchorPoint = Vector2.new(0.5, 0.5)
 v54.combatRing.BackgroundTransparency = 1
 v54.combatRing.Visible = false
-v54.combatRing.Parent = gui
+v54.combatRing.Parent = boxGui
 round(v54.combatRing, 999)
 v54.combatStroke = Instance.new("UIStroke")
 v54.combatStroke.Thickness = 2
@@ -3803,19 +3822,23 @@ round(v54.combatText, 6)
 v54.updateCombatRadius = function()
     local cam = Workspace.CurrentCamera
     local own = rootOf(localPlayer)
-    local role, source = getRole(localPlayer)
-    local show = enabled.CombatRadius and source == "game" and role == "Murderer"
-        and enabled.MurderAura and own and cam
-    v54.combatRing.Visible = show and true or false
+    local auraRole = v54.confirmRole("Murderer")
+    local show = enabled.CombatRadius and enabled.MurderAura
+        and auraRole and own and cam
+    v54.combatRing.Visible = not not show
     if not show then return end
+    local view = cam.ViewportSize
     local a, onScreen = cam:WorldToViewportPoint(own.Position)
-    local b = cam:WorldToViewportPoint(own.Position + cam.CFrame.RightVector * numbers.KnifeAuraRadius)
-    if not onScreen or a.Z <= 0 or b.Z <= 0 then
-        v54.combatRing.Visible = false
-        return
-    end
-    local radius = math.clamp(math.abs(b.X-a.X), 18, 700)
-    v54.combatRing.Position = UDim2.fromOffset(a.X,a.Y)
+    local b = cam:WorldToViewportPoint(own.Position
+        + cam.CFrame.RightVector * numbers.KnifeAuraRadius)
+    -- For first-person or camera-over-shoulder views, the root may be behind
+    -- the near plane. Show a clearly labeled fallback scan indicator anyway.
+    local centered = not onScreen or a.Z <= 0 or b.Z <= 0
+    local radius = centered and math.clamp(numbers.KnifeAuraRadius * 5, 55, 220)
+        or math.clamp(math.abs(b.X-a.X), 45, 320)
+    local x = centered and view.X/2 or math.clamp(a.X, 0, view.X)
+    local y = centered and view.Y/2 or math.clamp(a.Y, 0, view.Y)
+    v54.combatRing.Position = UDim2.fromOffset(x,y)
     v54.combatRing.Size = UDim2.fromOffset(radius*2,radius*2)
     local nearby = 0
     for _, player in ipairs(otherPlayers()) do
@@ -3825,7 +3848,8 @@ v54.updateCombatRadius = function()
         end
     end
     v54.combatStroke.Color = nearby > 0 and Color3.fromRGB(72,240,144) or Color3.fromRGB(255,130,111)
-    v54.combatText.Text = string.format("KNIFE AURA  %d studs • %d inside", numbers.KnifeAuraRadius, nearby)
+    v54.combatText.Text = string.format("AURA SCAN %d studs • %d nearby%s",
+        numbers.KnifeAuraRadius, nearby, centered and " • 2D" or "")
 end
 v54.updateAimRing = function()
     local camera = Workspace.CurrentCamera
@@ -4372,17 +4396,20 @@ end)
 heading(v54.murderPage, "EXPERIMENTAL • FRONT STACK")
 label(v54.murderPage, "Try holding living targets 2.7 studs in front of you for 2.2s while activating Knife. Target positioning is CLIENT-ONLY unless MM2 server accepts it. Simultaneous kills are NOT guaranteed.",
     96, Color3.fromRGB(240, 204, 161), 12)
-toggle(v54.murderPage, "KILL AURA • nearby knife activations", "MurderAura", function(on)
+toggle(v54.murderPage, "KILL AURA • scan radius + real knife contact", "MurderAura", function(on)
     if on and not v54.confirmRole("Murderer") then
         enabled.MurderAura = false
         for _, refresh in ipairs(toggleUpdaters) do refresh() end
-        inform("Aura requires game-confirmed Murderer role")
+        inform("Aura requires living Murderer role or actual Knife tool")
     else
-        inform(on and "Aura enabled; no teleports; nearby targets only" or "Aura disabled")
+        inform(on and "Aura scanning • knife attempts only near contact range" or "Aura disabled")
     end
 end)
 toggle(v54.murderPage, "SHOW LIVE KNIFE AURA CIRCLE", "CombatRadius")
-makeSlider(v54.murderPage, "KNIFE AURA RANGE", "KnifeAuraRadius", 5, 35, 1, " studs")
+makeSlider(v54.murderPage, "KNIFE AURA SCAN RANGE", "KnifeAuraRadius", 5, 35, 1, " studs")
+toggle(v54.murderPage, "AURA SHORT APPROACH (EXPERIMENTAL/UNSAFE)", "MurderAuraApproach")
+label(v54.murderPage, "Aura circle shows scan range. A normal Knife only attempts a hit within ~5 studs. Optional short approach up to 14 studs can cause Invalid Location; OFF by default.", 92,
+    Color3.fromRGB(213,197,168), 12)
 v54.roleActionLabel = label(v54.murderPage, "Role actions idle", 100, Color3.fromRGB(242, 214, 167), 12)
 v54.frontActionLabel = label(v54.murderPage, "Front actions idle", 95, Color3.fromRGB(242, 214, 167), 12)
 makeButton(v54.murderPage, "STOP ALL MURDER / FRONT ACTIONS", function() v54.stopRoleActions() end)
@@ -5153,7 +5180,7 @@ label(settingsPage, "Save preferences for next session. Uses executor readfile/w
 v54.settingsFile = "SPECTRA_MM2_settings_v5_9.json"
 v54.safeActive = {
     AutoCoinFarm = true, AutoGunPickup = true, AutoGunApproach = true,
-    AutoShootMurderer = true, SilentAim = true, MurderAura = true, FlingActive = true, Fly = true, SpinMode = true,
+    AutoShootMurderer = true, SilentAim = true, MurderAura = true, MurderAuraApproach = true, FlingActive = true, Fly = true, SpinMode = true,
     CameraLock = true, Sprint = true, Noclip = true, AutoAimMurderer = true,
 }
 v54.settingsSnapshot = function()
