@@ -4654,6 +4654,21 @@ heading(v54.sheriffPage, "SHERIFF / HERO • GUN")
 label(v54.sheriffPage, "Game-confirmed Sheriff/Hero only. Normal auto-aim/shoot can require a visible Knife (setting below). The separate front-lock mode ignores Knife visibility and uses world-space Head coordinates. Shots remain unverified.",
     90, Color3.fromRGB(208, 223, 248), 12)
 makeButton(v54.sheriffPage, "SHOOT CONFIRMED MURDERER NOW", function() attemptMurdererShot(true) end)
+heading(v54.sheriffPage, "SHERIFF REQUEST TIMING")
+toggle(v54.sheriffPage, "RAPID FIRE • Sheriff only (experimental)", "SheriffRapidFire", function(on)
+    if on then
+        enabled.SilentAim = true
+        enabled.AutoSilentShot = true
+        enabled.AutoShootMurderer = false
+        inform("Rapid Fire armed. MM2 server cooldown still applies.")
+    else
+        inform("Rapid Fire disabled")
+    end
+    for _, refresh in ipairs(toggleUpdaters) do refresh() end
+end)
+makeSlider(v54.sheriffPage, "RAPID REQUEST INTERVAL", "SheriffRapidInterval", 0.65, 2.5, 0.05, " s")
+label(v54.sheriffPage, "Sets the local request interval, not the actual server weapon reload. This option cannot guarantee more registered hits.", 64,
+    Color3.fromRGB(200,220,245), 12)
 heading(v54.sheriffPage, "EXPERIMENTAL • FRONT HEADSHOT")
 label(v54.sheriffPage, "D-PAD DOWN / FRONT HEADSHOT: recommended mode positions YOUR Sheriff near the Murderer's actual location at configured gun range for 5.5s, locks the camera to their Head, and requests gun shots. The old visual-only target-moving mode remains optional. Server may reject movement or shots.",
     92, Color3.fromRGB(240, 204, 161), 12)
