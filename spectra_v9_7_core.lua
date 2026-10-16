@@ -1432,54 +1432,75 @@ v54.ensure2DBox = function(player)
     v54.box2DObjects[player] = box
     return box
 end
+-- Use the actual rig collision/hitbox part sizes rather than an approximate rectangle.
+-- CanCollide is often false on R15 limbs, so do not exclude non-collidable body parts.
 v54.update2DBoxes = function()
     if destroyed then return end
     if not enabled.PlayerESP or not enabled.BoxESP2D then
-        for _, box in pairs(v54.box2DObjects) do
-            if box.frame then box.frame.Visible = false end
+        for _, effect in pairs(v54.box2DObjects) do
+            if effect.frame then effect.frame.Visible = false end
         end
         return
     end
     local cam = Workspace.CurrentCamera
     if not cam then return end
-    local w, h = cam.ViewportSize.X, cam.ViewportSize.Y
+    local vw, vh = cam.ViewportSize.X, cam.ViewportSize.Y
+    local localRoot = rootOf(localPlayer)
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= localPlayer then
             local box = v54.box2DObjects[player]
-            local root, char = rootOf(player), characterOf(player)
+            local char, root = characterOf(player), rootOf(player)
             local role, source = getRole(player)
-            local tracked = not enabled.ThreatsOnly
-                or role == "Murderer" or role == "Sheriff" or role == "Hero"
-            local distance = root and distanceTo(root)
-            local eligible = root and char and alive(player) and tracked
+            local tracked = not enabled.ThreatsOnly or role == "Murderer"
+                or role == "Sheriff" or role == "Hero"
+            local distance = root and localRoot and (localRoot.Position-root.Position).Magnitude
+            local eligible = char and root and alive(player) and tracked
                 and (not enabled.RangeLimit or (distance and distance <= numbers.ESPRange))
             if eligible then
-                local rootPoint = cam:WorldToViewportPoint(root.Position)
-                if rootPoint.Z > 0.4 then
-                    local low, high = v54.getBodyBounds(char,root,os.clock())
+                local center = cam:WorldToViewportPoint(root.Position)
+                if center.Z > 0.1 then
                     local left, top, right, bottom = math.huge, math.huge, -math.huge, -math.huge
-                    local seen = 0
-                    for _, x in ipairs({low.X,high.X}) do
-                        for _, y in ipairs({low.Y,high.Y}) do
-                            for _, z in ipairs({low.Z,high.Z}) do
-                                local projected = cam:WorldToViewportPoint(root.CFrame:PointToWorldSpace(Vector3.new(x,y,z)))
-                                if projected.Z > 0.35 then
-                                    left, top = math.min(left,projected.X), math.min(top,projected.Y)
-                                    right, bottom = math.max(right,projected.X), math.max(bottom,projected.Y)
-                                    seen += 1
+                    local projectedParts = 0
+                    for _, part in ipairs(char:GetChildren()) do
+                        if part:IsA("BasePart") and part ~= root
+                            and part.Transparency < 0.98
+                            and not part.Name:lower():find("hitbox",1,true) then
+                            local cf, half = part.CFrame, part.Size * 0.5
+                            local fullyInFront = true
+                            local pl, pt, pr, pb = math.huge,math.huge,-math.huge,-math.huge
+                            for x = -1, 1, 2 do
+                                for y = -1, 1, 2 do
+                                    for z = -1, 1, 2 do
+                                        local point = cf:PointToWorldSpace(Vector3.new(half.X*x,half.Y*y,half.Z*z))
+                                        local screen = cam:WorldToViewportPoint(point)
+                                        if screen.Z <= 0.1 then
+                                            fullyInFront = false
+                                            break
+                                        end
+                                        pl,pt = math.min(pl,screen.X),math.min(pt,screen.Y)
+                                        pr,pb = math.max(pr,screen.X),math.max(pb,screen.Y)
+                                    end
+                                    if not fullyInFront then break end
                                 end
+                                if not fullyInFront then break end
+                            end
+                            if fullyInFront then
+                                left,top = math.min(left,pl),math.min(top,pt)
+                                right,bottom = math.max(right,pr),math.max(bottom,pb)
+                                projectedParts += 1
                             end
                         end
                     end
-                    if seen >= 4 and right > 0 and bottom > 0 and left < w and top < h then
-                        left, top = math.clamp(left,0,w), math.clamp(top,0,h)
-                        right, bottom = math.clamp(right,0,w), math.clamp(bottom,0,h)
-                        if right-left > 4 and bottom-top > 8 then
+                    if projectedParts > 0 and left < vw and right > 0 and top < vh and bottom > 0 then
+                        local x1,x2 = math.clamp(left,0,vw),math.clamp(right,0,vw)
+                        local y1,y2 = math.clamp(top,0,vh),math.clamp(bottom,0,vh)
+                        if x2-x1 >= 2 and y2-y1 >= 4 then
                             box = box or v54.ensure2DBox(player)
-                            box.frame.Position = UDim2.fromOffset(math.floor(left), math.floor(top))
-                            box.frame.Size = UDim2.fromOffset(math.floor(right-left), math.floor(bottom-top))
-                            box.border.Color = enabled.RoleESP and getRoleColor(role,source)
-                                or colorForHint(visibleWeaponHint(player))
+                            box.frame.Position = UDim2.fromOffset(math.floor(x1),math.floor(y1))
+                            box.frame.Size = UDim2.fromOffset(math.floor(x2-x1),math.floor(y2-y1))
+                            box.border.Color = enabled.Rainbow and Color3.fromHSV((os.clock()/5)%1,0.85,1)
+                                or (enabled.RoleESP and getRoleColor(role,source)
+                                or colorForHint(visibleWeaponHint(player)))
                             box.frame.Visible = true
                         elseif box then box.frame.Visible = false end
                     elseif box then box.frame.Visible = false end
