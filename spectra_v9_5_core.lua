@@ -5541,7 +5541,7 @@ v54.catalogPreviewEntries = {
     {"R15", "R6 STYLE TWO HAND SWORD", 13978504790}
 }
 heading(pages["ANIMS"], "RIG-COMPATIBLE PREVIEW IDS")
-label(pages["ANIMS"], "Includes standard Roblox animations, catalog emotes, and extra R6 transitions. Only IDs matching your current rig appear; other creators\u0027 assets may still need permission.", 100,
+label(pages["ANIMS"], "Includes standard Roblox animations, catalog emotes, and extra R6 transitions. Only IDs matching your current rig appear; other creators' assets may still need permission.", 100,
     Color3.fromRGB(185,207,237), 12)
 for _, item in ipairs(v54.catalogPreviewEntries) do
     local rig, title, id = item[1], item[2], item[3]
