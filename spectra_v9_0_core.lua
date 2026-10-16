@@ -2320,7 +2320,8 @@ local function beginCoinFlight(target)
                 end
                 local dt = RunService.Heartbeat:Wait()
                 if not enabled.AutoCoinFarm then break end
-                local step = math.min(remaining.Magnitude, numbers.FarmFlySpeed * math.min(dt, 0.1))
+                local step = math.min(remaining.Magnitude,
+                    math.min(numbers.FarmFlySpeed, 30) * math.min(dt, 0.1))
                 root.CFrame = CFrame.new(root.Position + remaining.Unit * step)
                     * (root.CFrame - root.CFrame.Position)
                 v54.farmTravelDetail = string.format("Flying through map • %d studs", math.floor(remaining.Magnitude))
@@ -4273,7 +4274,7 @@ toggle(farmPage, "Mode: FLY THROUGH WALLS (UNSAFE)", "CoinFlight", function(on)
 end)
 label(farmPage, "WALK mode is the conservative default. Both TELEPORT and FLY can still result in Invalid Location or movement correction.",
     67, Color3.fromRGB(205, 219, 240), 12)
-makeSlider(farmPage, "FARM FLIGHT SPEED", "FarmFlySpeed", 10, 100, 1, " studs/s")
+makeSlider(farmPage, "FARM FLIGHT SPEED (CAP 30)", "FarmFlySpeed", 10, 30, 1, " studs/s")
 makeSlider(farmPage, "TELEPORT INTERVAL", "FarmTeleportDelay", 1, 8, 0.5, " sec")
 toggle(farmPage, "Include seasonal items by name", "FarmEvents", function()
     farmLastScan = 0
@@ -4346,7 +4347,10 @@ toggle(aimPage, "AUTO AIM • confirmed Murderer (visible radius)", "AutoAimMurd
     if on then enabled.AimAssist = false; enabled.CameraLock = false end
     for _, refresh in ipairs(toggleUpdaters) do refresh() end
 end)
-toggle(aimPage, "AUTO SHOOT • confirmed Murderer (Gun only)", "AutoShootMurderer")
+toggle(aimPage, "AUTO SHOOT • confirmed Murderer (Gun only)", "AutoShootMurderer", function(on)
+    if on then enabled.AutoSilentShot = false end
+    for _, refresh in ipairs(toggleUpdaters) do refresh() end
+end)
 toggle(aimPage, "AUTO SILENT SHOT • visible Murderer Head", "AutoSilentShot", function(on)
     if on then
         enabled.SilentAim = true
@@ -4373,6 +4377,7 @@ toggle(aimPage, "SILENT AIM • head target when firing Gun", "SilentAim", funct
         v54.silentAimReport = "ON • equip Gun as Sheriff, then fire"
     else
         v54.silentAimReport = "OFF"
+        enabled.AutoSilentShot = false
     end
     for _, refresh in ipairs(toggleUpdaters) do refresh() end
     inform(v54.silentAimReport)
@@ -5348,7 +5353,8 @@ label(settingsPage, "Save preferences for next session. Uses executor readfile/w
 v54.settingsFile = "SPECTRA_MM2_settings_v5_9.json"
 v54.safeActive = {
     AutoCoinFarm = true, AutoGunPickup = true, AutoGunApproach = true,
-    AutoShootMurderer = true, SilentAim = true, AutoSilentShot = true, MurderAura = true, MurderAuraApproach = true, FlingActive = true, Fly = true, SpinMode = true,
+    AutoShootMurderer = true, SilentAim = true, AutoSilentShot = true,
+    CoinTeleport = true, CoinFlight = true, MurderAura = true, MurderAuraApproach = true, FlingActive = true, Fly = true, SpinMode = true,
     CameraLock = true, Sprint = true, Noclip = true, AutoAimMurderer = true,
 }
 v54.settingsSnapshot = function()
@@ -5436,6 +5442,7 @@ v54.loadSettings = function(quiet)
     numbers.AimSmooth = math.clamp(numbers.AimSmooth, 0.1, 1)
     numbers.KnifeAuraRadius = math.clamp(numbers.KnifeAuraRadius, 5, 35)
     numbers.Speed = math.clamp(numbers.Speed, 8, 36)
+    numbers.FarmFlySpeed = math.clamp(numbers.FarmFlySpeed, 10, 30)
     numbers.FarmRadius = math.clamp(numbers.FarmRadius, 100, 1800)
     numbers.SheriffFrontDistance = math.clamp(numbers.SheriffFrontDistance, 8, 30)
     numbers.Gravity = math.clamp(numbers.Gravity, 30, 300)
