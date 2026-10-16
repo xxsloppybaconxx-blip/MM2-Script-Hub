@@ -3106,14 +3106,23 @@ local function attemptMurdererShot(manual, headPriority)
     shotInFlight = true
     lastShotAttempt = now
     shotAttemptCount += 1
-    shotNotice = (headPriority and "Headshot" or "Gun") .. " request #" .. shotAttemptCount
+    local request = shotAttemptCount
+    if enabled.AutoSilentShot then
+        v54.silentAimReport = "Auto head shot #" .. request .. " pending • hit not confirmed"
+    end
+    shotNotice = (headPriority and "Headshot" or "Gun") .. " request #" .. request
         .. " pending; hit not confirmed"
     task.spawn(function()
         local ok, err = pcall(function() remote:InvokeServer(1, position, shotTag) end)
         shotInFlight = false
         if destroyed then return end
-        shotNotice = ok and ("Sent gun request #" .. shotAttemptCount .. "; hit unconfirmed")
+        shotNotice = ok and ("Sent gun request #" .. request .. "; hit unconfirmed")
             or ("Gun remote error: " .. tostring(err):sub(1, 65))
+        if enabled.AutoSilentShot then
+            v54.silentAimReport = ok
+                and ("Auto Silent Shot #" .. request .. " requested; server hit UNVERIFIED")
+                or ("Auto Silent Shot failed: " .. tostring(err):sub(1, 70))
+        end
         if manual or not ok then inform(shotNotice) end
     end)
 end
