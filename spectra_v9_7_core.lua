@@ -121,6 +121,7 @@ local enabled = {
     AutoSilentShot = false,
     SheriffRapidFire = false,
     ShowSheriffCrosshair = true,
+    AimTorso = true,
     SheriffDpadFrontLock = true, -- Down runs front-lock test; toggle OFF for ordinary auto aim
     SheriffFrontMoveSelf = true, -- Place your character near the Murderer; don't fabricate target positions on your client
     SheriffRequireVisibleKnife = true, -- Normal sheriff auto aim/shoot only; NEVER gate front-stack
@@ -129,7 +130,7 @@ local enabled = {
     ControllerHoldAim = true,
     LocalGhost = false,
 }
-local numbers = { Speed = 24, Jump = 65, FlySpeed = 45, FOV = 70, ESPRange = 250, FarmRadius = 1000, FarmFlySpeed = 25, FarmTeleportDelay = 2.5, AimRadius = 210, AimSmooth = 0.54, FarmVisitCap = 40, KnifeAuraRadius = 12, SheriffFrontDistance = 14, SpinFlingSpeed = 2400, SpinFlingDuration = 2.25, TouchSpinSpeed = 8000, TouchDuration = 1.55, LaunchSpeed = 480, LaunchDuration = 1.65, SheriffRapidInterval = 1.1, CrosshairSize = 16, CrosshairOpacity = 0.96, Gravity = Workspace.Gravity }
+local numbers = { Speed = 24, Jump = 65, FlySpeed = 45, FOV = 70, ESPRange = 250, FarmRadius = 1000, FarmFlySpeed = 25, FarmTeleportDelay = 2.5, AimRadius = 210, AimSmooth = 0.54, FarmVisitCap = 40, KnifeAuraRadius = 12, SheriffFrontDistance = 14, SpinFlingSpeed = 2400, SpinFlingDuration = 2.25, TouchSpinSpeed = 8000, TouchDuration = 1.55, LaunchSpeed = 480, LaunchDuration = 1.65, SheriffRapidInterval = 1.1, ShotLead = 0.055, CrosshairSize = 16, CrosshairOpacity = 0.96, Gravity = Workspace.Gravity }
 -- Save a copy of defaults before users customize settings.
 local playerEffects = {}
 local objectEffects = {}
@@ -3207,6 +3208,16 @@ v54.isMurdererKnifeVisible = function(player)
     return false
 end
 
+-- Prefer a rig hitbox over a cosmetic piece; R6 and R15 both supported.
+v54.getShotPart = function(player, forceHead)
+    local char = characterOf(player)
+    if not char then return nil end
+    local head = char:FindFirstChild("Head")
+    local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+        or char:FindFirstChild("LowerTorso")
+    local selected = (not forceHead and enabled.AimTorso and torso) or head or torso
+    return selected and selected:IsA("BasePart") and selected or rootOf(player)
+end
 local function findAimPart()
     local camera = Workspace.CurrentCamera
     if not camera then return nil end
@@ -3218,11 +3229,11 @@ local function findAimPart()
     if v54.sheriffFrontShotActive then
         local murderer = findConfirmedMurderer(true)
         local char = murderer and characterOf(murderer)
-        local head = char and char:FindFirstChild("Head")
+        local part = char and v54.getShotPart(murderer)
         -- Ignore knife visibility and radius, but NOT solid-wall obstruction.
-        if murderer and alive(murderer) and head and head:IsA("BasePart")
-            and hasWallClearance(camera, head) then
-            return head
+        if murderer and alive(murderer) and part and part:IsA("BasePart")
+            and hasWallClearance(camera, part) then
+            return part
         end
         return nil
     end
@@ -3235,7 +3246,7 @@ local function findAimPart()
         if not l2 and enabled.SheriffRequireVisibleKnife
             and not v54.isMurdererKnifeVisible(murderer) then return nil end
         local char = characterOf(murderer)
-        local part = char and (char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart"))
+        local part = char and v54.getShotPart(murderer)
         if l2 and part and alive(murderer) and hasWallClearance(camera, part) then
             return part
         end
@@ -3252,7 +3263,7 @@ local function findAimPart()
         if alive(player) and role == "Murderer"
             and (not enabled.SheriffRequireVisibleKnife or v54.isMurdererKnifeVisible(player)) then
             local char = characterOf(player)
-            local part = char and (char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart"))
+            local part = char and v54.getShotPart(player)
             if part then
                 local projected, onScreen = camera:WorldToViewportPoint(part.Position)
                 local dist = (Vector2.new(projected.X, projected.Y) - center).Magnitude
@@ -3420,11 +3431,8 @@ local function attemptMurdererShot(manual, headPriority)
         return
     end
     local murdererChar = murderer and characterOf(murderer)
-    local head = murdererChar and murdererChar:FindFirstChild("Head")
-    -- Auto mode must target the Head too: v7.5 used HRP in automatic
-    -- shots while the camera tracked the Head (especially inaccurate in TPS).
-    local targetPart = (head and head:IsA("BasePart") and head)
-        or (not headPriority and murderer and rootOf(murderer))
+    -- Use the selected physical hitbox instead of tiny head-only aim.
+    local targetPart = murderer and v54.getShotPart(murderer, headPriority)
     if not targetPart then
         shotNotice = "Waiting for a living, game-confirmed Murderer"
         if manual then inform(shotNotice) end
@@ -3459,10 +3467,13 @@ local function attemptMurdererShot(manual, headPriority)
     local myHead = myChar and myChar:FindFirstChild("Head")
     local firstPerson = camera and myHead
         and (camera.CFrame.Position - myHead.Position).Magnitude < 2.1
-    local lead = (v54.sheriffFrontShotActive or enabled.SilentAim
-        or enabled.AutoSilentShot) and 0
-        or (firstPerson and 0.02 or 0.008)
+    local lead = v54.sheriffFrontShotActive and 0
+        or math.clamp(numbers.ShotLead or 0.055, 0, 0.18)
     local position = targetPart.Position + targetPart.AssemblyLinearVelocity * lead
+    local offset = position - targetPart.Position
+    if offset.Magnitude > 1.2 then
+        position = targetPart.Position + offset.Unit * 1.2
+    end
     if v54.sheriffFrontShotActive and not enabled.SilentAim
         and not enabled.AutoSilentShot and camera then
         -- Avoid firing while the third-person camera is still catching up
@@ -4919,6 +4930,8 @@ toggle(v54.sheriffPage, "AUTO SHOOT • head target (1P/3P)", "AutoShootMurderer
     end
 end)
 toggle(v54.sheriffPage, "REQUIRE VISIBLE KNIFE (normal auto aim/shoot only)", "SheriffRequireVisibleKnife")
+toggle(v54.sheriffPage, "AIM TORSO HITBOX (OFF = Head)", "AimTorso")
+makeSlider(v54.sheriffPage, "MOVEMENT PREDICTION", "ShotLead", 0, 0.18, 0.01, " s")
 toggle(v54.sheriffPage, "SHOW AIM/SHOT RADIUS RING", "CombatRadius")
 toggle(v54.sheriffPage, "CROSSHAIR ON SHERIFF/HERO GUN", "ShowSheriffCrosshair")
 toggle(v54.sheriffPage, "D-PAD ↓: MURDERER IN FRONT (OFF = auto aim)", "SheriffDpadFrontLock")
